@@ -1,0 +1,118 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+    body {
+        background-color: #0b0e11;
+        color: #94a3b8;
+        @apply overflow-hidden;
+    }
+}
+
+::-webkit-scrollbar {
+    width: 5px;
+    height: 5px;
+}
+
+::-webkit-scrollbar-track {
+    background: #0b0e11;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #242b3b;
+    border-radius: 3px;
+}
+
+.tf-btn {
+    @apply bg-transparent text-slate-500 border border-border transition-all px-2 py-1 rounded text-[10px] font-bold;
+}
+
+.tf-btn:hover {
+    @apply border-accent text-white;
+}
+
+.tf-btn.active {
+    background-color: #2962ff;
+    color: white;
+    border-color: #2962ff;
+    box-shadow: 0 0 10px rgba(41, 98, 255, 0.3);
+}
+
+.main-tab {
+    @apply text-slate-500 border-b-2 border-transparent transition-all p-3 w-full flex justify-center;
+}
+
+.main-tab.active {
+    color: white;
+    border-color: #2962ff;
+    background-image: linear-gradient(to bottom, transparent, rgba(41, 98, 255, 0.1));
+}
+
+.sub-tab {
+    @apply text-[10px] font-bold py-1.5 rounded border border-transparent text-slate-500 transition-colors bg-transparent;
+}
+
+.sub-tab:hover {
+    @apply text-slate-300 bg-white/5;
+}
+
+.sub-tab.active {
+    background-color: #2962ff;
+    color: white;
+    border-color: #2962ff;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+input[type=range] {
+    -webkit-appearance: none;
+    background: transparent;
+}
+
+input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    height: 10px;
+    width: 10px;
+    border-radius: 50%;
+    background: #2962ff;
+    margin-top: -3px;
+    cursor: pointer;
+}
+
+input[type=range]::-webkit-slider-runnable-track {
+    @apply w-full h-[4px] bg-border rounded-full;
+}
+
+.spinner {
+    @apply border-2 border-accent/10 border-l-accent rounded-full animate-spin;
+}
+
+.metric-card {
+    background-color: #1e232e;
+    @apply p-3 rounded border border-border flex flex-col items-center justify-center;
+}
+
+.metric-label {
+    @apply text-[9px] text-slate-500 font-bold uppercase tracking-wider mb-1;
+}
+
+.metric-value {
+    @apply text-sm font-mono font-bold text-white;
+}
+
+.custom-scroll::-webkit-scrollbar {
+    width: 4px;
+}
+
+.custom-scroll::-webkit-scrollbar-thumb {
+    @apply bg-slate-700 rounded-sm;
+}
+
+.input-dark {
+    background-color: #0b0e11;
+    @apply border border-border rounded px-2 py-1 text-xs text-white font-mono focus:border-accent focus:outline-none w-full;
+}
+
+.strat-card {
+    @apply transition-all duration-200;
+}

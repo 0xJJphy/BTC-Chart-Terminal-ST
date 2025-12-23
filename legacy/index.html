@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BTC Quant Terminal | Advanced SMC & Liquidity</title>
+
+    <!-- External Libraries -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap"
+        rel="stylesheet">
+
+    <!-- Tailwind Config -->
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        bg: '#0b0e11', panel: '#151a23', border: '#242b3b', text: '#94a3b8',
+                        white: '#e2e8f0', accent: '#2962ff', bull: '#089981', bear: '#f23645',
+                        fvg: '#a855f7', ob: '#eab308', trend: '#e879f9', reg: '#3b82f6', strat: '#f59e0b',
+                        pending: '#64748b'
+                    },
+                    fontFamily: { sans: ['Inter', 'sans-serif'], mono: ['JetBrains Mono', 'monospace'] }
+                }
+            }
+        }
+    </script>
+
+    <!-- Custom Styles -->
+    <link rel="stylesheet" href="css/main.css">
+</head>
+
+<body class="bg-bg text-text font-sans h-screen flex flex-col overflow-hidden">
+
+    <!-- Header / Nav -->
+    <header class="h-12 border-b border-border bg-panel flex items-center justify-between px-4 z-50">
+        <div class="flex items-center space-x-4">
+            <div class="flex items-center space-x-2">
+                <div class="w-8 h-8 bg-accent rounded-lg flex items-center justify-center shadow-lg shadow-accent/20">
+                    <i class="fas fa-bolt text-white text-xs"></i>
+                </div>
+                <div>
+                    <h1 class="text-white font-bold text-sm tracking-tight leading-none">ST TERMINAL</h1>
+                    <span class="text-[9px] text-slate-500 font-mono uppercase tracking-widest">BTC-USDT-QUANT</span>
+                </div>
+            </div>
+            <div class="h-4 w-[1px] bg-border mx-2"></div>
+            <div class="flex space-x-1" id="tf-selector">
+                <button onclick="setTF('1m')" class="tf-btn px-2 py-1 rounded text-[10px] font-bold">1M</button>
+                <button onclick="setTF('5m')" class="tf-btn px-2 py-1 rounded text-[10px] font-bold">5M</button>
+                <button onclick="setTF('15m')"
+                    class="tf-btn active px-2 py-1 rounded text-[10px] font-bold">15M</button>
+                <button onclick="setTF('1h')" class="tf-btn px-2 py-1 rounded text-[10px] font-bold">1H</button>
+                <button onclick="setTF('4h')" class="tf-btn px-2 py-1 rounded text-[10px] font-bold">4H</button>
+            </div>
+        </div>
+
+        <div class="flex items-center space-x-6">
+            <div class="flex flex-col items-end">
+                <span class="text-[9px] text-slate-500 font-bold uppercase">Live Price</span>
+                <span id="live-price" class="text-white font-mono text-xs font-bold">$---</span>
+            </div>
+            <div class="flex items-center space-x-2 bg-black/20 px-3 py-1.5 rounded-full border border-border/50">
+                <div id="ws-dot" class="w-2 h-2 rounded-full bg-bear"></div>
+                <span id="ws-text" class="text-[10px] font-mono text-slate-400">Connecting...</span>
+            </div>
+            <button onclick="manualRefresh()"
+                class="w-8 h-8 rounded-full border border-border hover:bg-white/5 transition-colors group">
+                <i class="fas fa-sync-alt text-xs text-slate-400 group-hover:text-accent transition-colors"></i>
+            </button>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="flex-1 flex overflow-hidden">
+        <!-- Sidebar Navigation -->
+        <nav class="w-14 border-r border-border bg-panel flex flex-col py-4 items-center space-y-6">
+            <button onclick="switchMainTab('zones')" id="mtab-zones"
+                class="main-tab active p-3 w-full flex justify-center group relative" title="SMC Explorer">
+                <i class="fas fa-layer-group text-lg"></i>
+            </button>
+            <button onclick="switchMainTab('trades')" id="mtab-trades"
+                class="main-tab p-3 w-full flex justify-center group relative" title="Operations">
+                <i class="fas fa-exchange-alt text-lg"></i>
+            </button>
+            <button onclick="switchMainTab('lines')" id="mtab-lines"
+                class="main-tab p-3 w-full flex justify-center group relative" title="Trend Analysis">
+                <i class="fas fa-chart-line text-lg"></i>
+            </button>
+            <button onclick="switchMainTab('reglin')" id="mtab-reglin"
+                class="main-tab p-3 w-full flex justify-center group relative" title="Regression Channels">
+                <i class="fas fa-grip-lines text-lg"></i>
+            </button>
+            <button onclick="switchMainTab('strat')" id="mtab-strat"
+                class="main-tab p-3 w-full flex justify-center group relative" title="Strategy Lab">
+                <i class="fas fa-flask text-lg"></i>
+            </button>
+            <button onclick="switchMainTab('pnl')" id="mtab-pnl"
+                class="main-tab p-3 w-full flex justify-center group relative" title="Performance Monitoring">
+                <i class="fas fa-chart-pie text-lg"></i>
+            </button>
+            <div class="flex-1"></div>
+            <button onclick="switchMainTab('log')" id="mtab-log"
+                class="text-slate-600 hover:text-white transition-colors" title="System Logs">
+                <i class="fas fa-terminal"></i>
+            </button>
+        </nav>
+
+        <!-- Chart Area -->
+        <section class="flex-1 flex flex-col bg-bg relative min-w-0">
+            <div id="tv-chart" class="flex-1"></div>
+
+            <!-- Replay Overlay Info -->
+            <div id="btn-back-live"
+                class="hidden absolute top-4 left-1/2 -translate-x-1/2 bg-accent/90 backdrop-blur px-4 py-2 rounded-full border border-white/20 shadow-2xl items-center space-x-3 group cursor-pointer z-50 overflow-hidden"
+                onclick="exitReplay()">
+                <div class="absolute inset-0 bg-white/5 group-hover:hidden"></div>
+                <div class="flex items-center space-x-2">
+                    <span class="w-2 h-2 rounded-full bg-white animate-pulse"></span>
+                    <span class="text-[10px] font-bold text-white uppercase tracking-wider">Historical Replay
+                        Mode</span>
+                </div>
+                <div class="h-3 w-[1px] bg-white/30"></div>
+                <span class="text-[9px] text-white/80 font-bold uppercase group-hover:text-white">Exit View</span>
+                <i class="fas fa-times text-[10px] text-white/60"></i>
+            </div>
+
+            <!-- Loader Overlay -->
+            <div id="loader"
+                class="absolute inset-0 bg-bg/80 backdrop-blur-sm z-[100] flex flex-col items-center justify-center space-y-4">
+                <div class="relative">
+                    <div class="w-16 h-16 border-4 border-accent/20 border-t-accent rounded-full animate-spin"></div>
+                    <div class="absolute inset-0 flex items-center justify-center">
+                        <i class="fas fa-terminal text-accent text-xl"></i>
+                    </div>
+                </div>
+                <div class="flex flex-col items-center">
+                    <span class="text-white font-bold text-xs uppercase tracking-[0.2em] mb-1">Downloading Historical
+                        Data</span>
+                    <span class="text-slate-500 font-mono text-[9px]">Analyzing 30,000 Candles in Real-Time</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- Right Panel (Contextual) -->
+        <aside id="right-panel" class="w-80 border-l border-border bg-panel flex flex-col shadow-2xl z-40">
+
+            <!-- Tab: SMC Explorer -->
+            <div id="view-zones" class="flex-1 flex flex-col">
+                <div class="p-4 border-b border-border bg-black/10">
+                    <div class="flex justify-between items-center mb-3">
+                        <h2 class="text-white font-bold text-xs uppercase tracking-widest">SMC Explorer</h2>
+                        <span class="text-[10px] bg-accent/20 text-accent px-2 py-0.5 rounded font-bold">AutoScan</span>
+                    </div>
+                    <div class="grid grid-cols-2 gap-1 mb-4">
+                        <button onclick="switchZoneSubTab('active')" id="ztab-active" class="sub-tab active">ACTIVE
+                            ZONES</button>
+                        <button onclick="switchZoneSubTab('history')" id="ztab-history"
+                            class="sub-tab">MITIGATED</button>
+                    </div>
+                    <div class="space-y-3">
+                        <div class="flex items-center justify-between">
+                            <label class="text-[9px] text-slate-500 font-bold uppercase">Display Limit</label>
+                            <span id="zone-count-display" class="text-[10px] text-accent font-mono">50</span>
+                        </div>
+                        <input id="zone-limit" type="range" class="w-full" min="10" max="200" value="50"
+                            onchange="updateUI(); renderVisuals();">
+                        <div class="flex items-center gap-4">
+                            <label class="flex items-center gap-2 cursor-pointer group">
+                                <input type="checkbox" id="toggle-fvg" checked onchange="renderVisuals()"
+                                    class="hidden peer">
+                                <div
+                                    class="w-4 h-4 border border-border rounded peer-checked:bg-fvg peer-checked:border-fvg transition-all flex items-center justify-center">
+                                    <i
+                                        class="fas fa-check text-[8px] text-white opacity-0 peer-checked:opacity-100"></i>
+                                </div>
+                                <span
+                                    class="text-[10px] text-slate-400 group-hover:text-fvg transition-colors font-medium">FVGs</span>
+                            </label>
+                            <label class="flex items-center gap-2 cursor-pointer group">
+                                <input type="checkbox" id="toggle-ob" checked onchange="renderVisuals()"
+                                    class="hidden peer">
+                                <div
+                                    class="w-4 h-4 border border-border rounded peer-checked:bg-ob peer-checked:border-ob transition-all flex items-center justify-center">
+                                    <i
+                                        class="fas fa-check text-[8px] text-white opacity-0 peer-checked:opacity-100"></i>
+                                </div>
+                                <span
+                                    class="text-[10px] text-slate-400 group-hover:text-ob transition-colors font-medium">OrderBlocks</span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+                <div class="flex-1 overflow-y-auto custom-scroll" id="list-zones-active"></div>
+                <div class="flex-1 overflow-y-auto custom-scroll hidden-panel" id="list-zones-history"></div>
+            </div>
+
+            <!-- Tab: Operations (Trades) -->
+            <div id="view-trades" class="flex-1 flex flex-col hidden-panel">
+                <div class="p-4 border-b border-border bg-black/10">
+                    <div class="flex justify-between items-center mb-4">
+                        <h2 class="text-white font-bold text-xs uppercase tracking-widest">Trade Terminal</h2>
+                        <select id="trade-strat-select" onchange="updateTradeStrategy()"
+                            class="bg-bg border border-border text-[9px] text-white rounded px-2 py-0.5 outline-none font-bold">
+                            <option value="SMC">SMC ENGINE</option>
+                            <option value="Trap">TL TRAP (STD)</option>
+                        </select>
+                    </div>
+                    <div class="grid grid-cols-3 gap-1">
+                        <button onclick="switchTradeSubTab('ideas')" id="ttab-ideas"
+                            class="sub-tab active">IDEAS</button>
+                        <button onclick="switchTradeSubTab('active')" id="ttab-active" class="sub-tab">LIVE</button>
+                        <button onclick="switchTradeSubTab('history')" id="ttab-history"
+                            class="sub-tab">HISTORY</button>
+                    </div>
+                </div>
+                <div class="flex-1 overflow-y-auto custom-scroll" id="list-trades-ideas"></div>
+                <div class="flex-1 overflow-y-auto custom-scroll hidden-panel" id="list-trades-active"></div>
+                <div class="flex-1 overflow-y-auto custom-scroll hidden-panel" id="list-trades-history"></div>
+            </div>
+
+            <!-- Tab: Trendlines (TL) -->
+            <div id="view-lines" class="flex-1 flex flex-col hidden-panel p-4 space-y-6">
+                <div class="flex justify-between items-center">
+                    <h2 class="text-white font-bold text-xs uppercase tracking-widest">Trend Analysis</h2>
+                    <span id="mode-indicator" class="text-[9px] text-slate-500 font-mono">Mode: TL</span>
+                </div>
+
+                <div class="bg-black/20 p-4 rounded-xl border border-border/40 space-y-4">
+                    <div class="flex items-center justify-between">
+                        <span class="text-[10px] text-slate-400 font-bold">Hurst Exponent</span>
+                        <div id="hurst-val" class="font-mono text-xs text-trend font-bold">---</div>
+                    </div>
+                    <div class="h-1 bg-border rounded-full overflow-hidden">
+                        <div id="hurst-bar" class="h-full bg-trend transition-all duration-500" style="width: 0%"></div>
+                    </div>
+                    <div id="hurst-type"
+                        class="text-center text-[9px] font-bold text-slate-500 uppercase tracking-widest italic">
+                        Calculating Market Regime...</div>
+                </div>
+
+                <div class="space-y-4">
+                    <div class="flex items-center justify-between">
+                        <label class="text-[10px] text-slate-400 font-bold uppercase">Fractal Strength</label>
+                        <span id="lbl-fractal" class="text-xs text-white font-mono">5</span>
+                    </div>
+                    <input id="fractal-strength" type="range" class="w-full" min="2" max="25" value="5"
+                        onchange="calculateTrendLines()">
+
+                    <div class="flex items-center justify-between">
+                        <label class="text-[10px] text-slate-400 font-bold uppercase">Error Tolerance</label>
+                        <span id="lbl-tolerance" class="text-xs text-white font-mono">Strict</span>
+                    </div>
+                    <input id="trend-tolerance" type="range" class="w-full" min="0" max="20" value="0"
+                        onchange="calculateTrendLines()">
+
+                    <div class="space-y-3 pt-2">
+                        <label class="flex items-center justify-between group cursor-pointer">
+                            <span
+                                class="text-[10px] text-slate-400 group-hover:text-white transition-colors uppercase font-bold">Show
+                                Past Breaks</span>
+                            <div class="relative inline-flex items-center cursor-pointer">
+                                <input id="trend-history" type="checkbox" onchange="calculateTrendLines()"
+                                    class="sr-only peer">
+                                <div
+                                    class="w-7 h-4 bg-border peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-accent">
+                                </div>
+                            </div>
+                        </label>
+
+                        <label class="flex items-center justify-between group cursor-pointer">
+                            <span
+                                class="text-[10px] text-slate-400 group-hover:text-white transition-colors uppercase font-bold">Strict
+                                Angles</span>
+                            <div class="relative inline-flex items-center cursor-pointer">
+                                <input id="angle-filter-active" type="checkbox" checked onchange="calculateTrendLines()"
+                                    class="sr-only peer">
+                                <div
+                                    class="w-7 h-4 bg-border peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-bull">
+                                </div>
+                            </div>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="p-3 bg-accent/5 rounded-lg border border-accent/20">
+                    <div id="lines-stats" class="text-[9px] text-accent font-bold text-center uppercase">0 Active
+                        Trendlines Found</div>
+                </div>
+            </div>
+
+            <!-- Tab: Regression Channels -->
+            <div id="view-reglin" class="flex-1 flex flex-col hidden-panel p-4 space-y-6">
+                <h2 class="text-white font-bold text-xs uppercase tracking-widest">Standard Deviation Channels</h2>
+
+                <div class="space-y-5">
+                    <div class="space-y-2">
+                        <div class="flex justify-between items-center text-[10px] text-slate-400 uppercase font-bold">
+                            <span>Lookback Period</span>
+                            <span id="lbl-reg-period" class="text-white font-mono">200</span>
+                        </div>
+                        <input id="reg-period" type="range" class="w-full" min="50" max="1000" value="200"
+                            onchange="calculateRegLin()">
+                    </div>
+
+                    <div class="space-y-2">
+                        <div class="flex justify-between items-center text-[10px] text-slate-400 uppercase font-bold">
+                            <span>Deviation Multiplier</span>
+                            <span id="lbl-reg-std" class="text-white font-mono">2.0</span>
+                        </div>
+                        <input id="reg-std" type="range" class="w-full" min="0.5" max="5.0" step="0.1" value="2.0"
+                            onchange="calculateRegLin()">
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4">
+                    <div class="bg-black/20 p-3 rounded-xl border border-border/40 text-center">
+                        <div class="text-[9px] text-slate-500 uppercase mb-1">Channel Slope</div>
+                        <div id="reg-slope" class="text-xs font-mono font-bold text-white">---</div>
+                    </div>
+                    <div class="bg-black/20 p-3 rounded-xl border border-border/40 text-center">
+                        <div class="text-[9px] text-slate-500 uppercase mb-1">R² Confidence</div>
+                        <div id="reg-confidence" class="text-xs font-mono font-bold text-bull">98.2%</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab: Strategy Lab (EST) -->
+            <div id="view-strat" class="flex-1 flex flex-col hidden-panel">
+                <div class="p-4 border-b border-border bg-black/10 space-y-4">
+                    <div class="flex justify-between items-center">
+                        <h2 class="text-white font-bold text-xs uppercase tracking-widest">Strategy Lab</h2>
+                        <i class="fas fa-flask text-accent"></i>
+                    </div>
+
+                    <div class="space-y-2">
+                        <label class="text-[9px] text-slate-500 font-bold uppercase">Backtest Engine</label>
+                        <div class="flex gap-2">
+                            <select id="strat-select"
+                                class="flex-1 bg-bg border border-border text-[10px] text-white rounded px-2 py-2 outline-none font-bold">
+                                <optgroup label="Core Traps">
+                                    <option value="standard">🏹 LIQUIDITY TRAP (STD)</option>
+                                    <option value="agro">🔥 TRAP AGGRESSIVE (3R)</option>
+                                </optgroup>
+                                <optgroup label="ATR Optimized">
+                                    <option value="atr">📦 ATR ENTRY (2R)</option>
+                                    <option value="atr_agro">🦁 ATR ENTRY (3R)</option>
+                                </optgroup>
+                                <optgroup label="Scaling Options">
+                                    <option value="atr_partial_1">🌗 PARTIAL TP (3R+5R)</option>
+                                    <option value="atr_partial_2">🌗 PARTIAL TP (2R+4R)</option>
+                                </optgroup>
+                            </select>
+                            <button onclick="runSelectedStrategy()"
+                                class="bg-accent hover:bg-accent/80 text-white p-2 rounded w-10 flex items-center justify-center transition-colors shadow-lg shadow-accent/20">
+                                <i class="fas fa-play text-[10px]"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="bg-panel/50 p-3 rounded-lg border border-border/50 space-y-2">
+                        <div class="flex justify-between items-center">
+                            <span class="text-[9px] text-slate-400 font-bold uppercase transition-colors">Volume
+                                Confluence</span>
+                            <div class="relative inline-flex items-center cursor-pointer">
+                                <input id="check-volume-analysis" type="checkbox" onchange="runSelectedStrategy()"
+                                    class="sr-only peer">
+                                <div
+                                    class="w-6 h-3.5 bg-border peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-2.5 after:w-2.5 after:transition-all peer-checked:bg-bull">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div id="strat-results" class="flex-1 overflow-y-auto custom-scroll">
+                    <div class="p-8 text-center space-y-4">
+                        <div class="w-12 h-12 bg-accent/10 rounded-full flex items-center justify-center mx-auto">
+                            <i class="fas fa-play text-accent text-xs"></i>
+                        </div>
+                        <div class="text-[9px] text-slate-500 uppercase font-bold tracking-[.2em] leading-relaxed">
+                            Select a setup and press playback to analyze<br>thousands of data points instantly.
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab: PnL Performance Monitoring -->
+            <div id="view-pnl" class="flex-1 flex flex-col hidden-panel overflow-y-auto custom-scroll p-4">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-white font-bold text-xs uppercase tracking-widest">Account Health</h2>
+                    <div class="flex items-center space-x-2">
+                        <span class="text-[9px] text-slate-500">Live Equity</span>
+                        <div class="w-2 h-2 rounded-full bg-bull animate-pulse"></div>
+                    </div>
+                </div>
+
+                <!-- Balance Summary Cards -->
+                <div class="grid grid-cols-2 gap-2 mb-4">
+                    <div class="bg-panel border border-border/50 p-4 rounded-xl shadow-lg">
+                        <div class="text-[9px] text-slate-500 uppercase font-bold mb-1">Current Balance</div>
+                        <div id="balance-current" class="text-lg font-mono font-bold text-white">$---</div>
+                        <div class="text-[9px] text-slate-500 mt-2 font-mono">Realized: <span id="pnl-realized"
+                                class="text-white">0.00</span></div>
+                    </div>
+                    <div class="bg-panel border border-border/50 p-4 rounded-xl shadow-lg border-l-4 border-l-accent">
+                        <div class="text-[9px] text-slate-500 uppercase font-bold mb-1">Effective Equity</div>
+                        <div id="balance-equity" class="text-lg font-mono font-bold text-accent">$---</div>
+                        <div class="text-[9px] text-slate-500 mt-2 font-mono">Floating: <span id="pnl-unrealized"
+                                class="text-bull">0.00</span></div>
+                    </div>
+                </div>
+
+                <!-- Simulation Settings -->
+                <div class="bg-black/20 p-4 rounded-xl border border-border mb-4">
+                    <div
+                        class="text-[10px] font-bold text-slate-400 mb-4 uppercase tracking-wider flex items-center gap-2">
+                        <i class="fas fa-cog text-slate-600"></i> Simulator Settings
+                    </div>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div class="space-y-2">
+                            <label class="text-[8px] text-slate-500 font-bold uppercase">Initial Balance ($)</label>
+                            <input id="initial-balance" type="number" value="10000" class="input-dark"
+                                onchange="updatePnLMetrics()">
+                        </div>
+                        <div class="space-y-2">
+                            <label class="text-[8px] text-slate-500 font-bold uppercase">Risk Per Trade</label>
+                            <div class="text-xs font-bold text-white font-mono mt-1">1.0% Fixed</div>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-4 mt-4">
+                        <div class="space-y-2">
+                            <label class="text-[8px] text-slate-500 font-bold uppercase">Maker %</label>
+                            <input id="fee-maker" type="number" step="0.01" value="0.02" class="input-dark"
+                                onchange="updatePnLMetrics()">
+                        </div>
+                        <div class="space-y-2">
+                            <label class="text-[8px] text-slate-500 font-bold uppercase">Taker %</label>
+                            <input id="fee-taker" type="number" step="0.01" value="0.05" class="input-dark"
+                                onchange="updatePnLMetrics()">
+                        </div>
+                    </div>
+
+                    <label
+                        class="flex items-center justify-between mt-4 p-2 bg-bg rounded group cursor-pointer border border-border/30">
+                        <span
+                            class="text-[9px] text-slate-500 group-hover:text-white transition-colors uppercase font-bold">Incorporate
+                            Fees</span>
+                        <div class="relative inline-flex items-center cursor-pointer">
+                            <input id="include-fees" type="checkbox" onchange="updatePnLMetrics()" class="sr-only peer">
+                            <div
+                                class="w-6 h-3 bg-border peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[1px] after:left-[1px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-2.5 after:w-2.5 after:transition-all peer-checked:bg-accent">
+                            </div>
+                        </div>
+                    </label>
+                </div>
+
+                <!-- Mini Metrics Grid -->
+                <div class="grid grid-cols-3 gap-2 mb-4">
+                    <div class="metric-card">
+                        <span class="metric-label">Profit Factor</span>
+                        <span id="metric-pf" class="metric-value">---</span>
+                    </div>
+                    <div class="metric-card">
+                        <span class="metric-label">WinRate %</span>
+                        <span id="metric-wr" class="metric-value">---</span>
+                    </div>
+                    <div class="metric-card">
+                        <span class="metric-label">Sharpe Ratio</span>
+                        <span id="metric-sharpe" class="metric-value">---</span>
+                    </div>
+                    <div class="metric-card">
+                        <span class="metric-label">Sortino</span>
+                        <span id="metric-sortino" class="metric-value">---</span>
+                    </div>
+                    <div class="metric-card">
+                        <span class="metric-label">Max. Drawdown</span>
+                        <span id="metric-dd" class="metric-value">---</span>
+                    </div>
+                    <div class="metric-card">
+                        <span class="metric-label">Tot. Samples</span>
+                        <span id="metric-total-trades" class="metric-value">0</span>
+                    </div>
+                </div>
+
+                <!-- Equity Chart Container -->
+                <div class="space-y-4">
+                    <div
+                        class="text-[9px] text-slate-500 font-bold uppercase tracking-widest text-center border-t border-border/50 pt-4">
+                        Equity Curve Evolution</div>
+                    <div id="pnl-chart"
+                        class="h-48 w-full border border-border/30 rounded-lg overflow-hidden bg-black/10"></div>
+                </div>
+
+                <!-- Extra Analytical Stats -->
+                <div class="mt-4 bg-panel/30 border border-border/30 rounded-xl p-4 space-y-3">
+                    <div class="flex justify-between items-center text-[10px]">
+                        <span class="text-slate-500 uppercase font-bold">Analysis Period:</span>
+                        <span id="metric-active-time" class="text-white font-mono">---</span>
+                    </div>
+                    <div class="flex justify-between items-center text-[10px]">
+                        <span class="text-slate-500 uppercase font-bold">Avg. Hold Duration:</span>
+                        <span id="metric-avg-duration" class="text-white font-mono">---</span>
+                    </div>
+                    <div class="flex justify-between items-center text-[10px]">
+                        <span class="text-slate-500 uppercase font-bold">Max. Hold Duration:</span>
+                        <span id="metric-max-duration" class="text-white font-mono">---</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab: Logs -->
+            <div id="view-log" class="flex-1 flex flex-col hidden-panel">
+                <div class="p-4 border-b border-border flex justify-between items-center">
+                    <h2 class="text-white font-bold text-xs uppercase tracking-widest flex items-center gap-2">
+                        <i class="fas fa-terminal text-accent"></i> System Diagnostics
+                    </h2>
+                    <button onclick="document.getElementById('system-log').innerHTML=''"
+                        class="text-[9px] text-slate-500 hover:text-white uppercase font-bold">Clear</button>
+                </div>
+                <div id="system-log"
+                    class="flex-1 overflow-y-auto p-4 font-mono text-[10px] text-slate-400 space-y-1 bg-[#0b0e11]">
+                    <div>> Terminal initialized. Ready for analysis.</div>
+                </div>
+            </div>
+        </aside>
+    </main>
+
+    <!-- App Scripts -->
+    <script src="js/app.js"></script>
+    <script src="js/api.js"></script>
+    <script src="js/chart.js"></script>
+    <script src="js/indicators.js"></script>
+    <script src="js/helpers.js"></script>
+    <script src="js/ui.js"></script>
+    <script src="js/strategies.js"></script>
+    <script src="js/strategies/smc.js"></script>
+    <script src="js/strategies/liquidity.js"></script>
+    <script src="js/strategies/optimizer.js"></script>
+
+</body>
+
+</html>
