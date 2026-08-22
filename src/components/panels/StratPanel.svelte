@@ -38,8 +38,24 @@
             <h2 class="text-white font-bold text-xs uppercase tracking-widest">
                 Strategy Lab
             </h2>
-            <div class="flex items-center gap-2">
-                <label class="flex items-center gap-2 cursor-pointer group">
+            <div class="flex items-center gap-3">
+                <label class="flex items-center gap-1.5 cursor-pointer group" title="Run backtest on complete multi-year database (240k+ candles)">
+                    <input
+                        type="checkbox"
+                        bind:checked={$state.fullHistoryBacktest}
+                        class="hidden"
+                    />
+                    <div
+                        class="w-3 h-3 border border-border rounded {$state.fullHistoryBacktest
+                            ? 'bg-accent border-accent'
+                            : ''} transition-all"
+                    ></div>
+                    <span
+                        class="text-[9px] {$state.fullHistoryBacktest ? 'text-accent font-bold' : 'text-slate-500'} group-hover:text-accent uppercase transition-colors"
+                        >All History (240k)</span
+                    >
+                </label>
+                <label class="flex items-center gap-1.5 cursor-pointer group">
                     <input
                         type="checkbox"
                         bind:checked={$state.useVolumeAnalysis}

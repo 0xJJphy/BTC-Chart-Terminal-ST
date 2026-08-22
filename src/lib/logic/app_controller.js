@@ -23,44 +23,180 @@ async function ensureWasm() {
 }
 
 let chartReference = null;
+let cachedFullHistory = null;
+let cachedFullHistorySymbol = null;
 
 export function setChartReference(chart) {
     chartReference = chart;
 }
 
-export async function runFullLoadPipeline() {
-    await ensureWasm(); 
-    state.update(s => ({ ...s, loading: true, candles: [] }));
-    let endTime = null;
-    let allCandles = [];
+/**
+ * Fetch a batch of candles from Local Database with Binance REST fallback
+ */
+export async function fetchCandlesBatch({ symbol = APP.symbol, limit = APP.chunkSize, endTime = null } = {}) {
+    // 1. Try local PostgreSQL DB (alt_scraper: futures_klines_15m)
+    try {
+        let dbUrl = `/api/db/klines?symbol=${symbol}&exchange=binance&limit=${limit}`;
+        if (endTime) dbUrl += `&endTime=${endTime}`;
 
-    addToLog(`Initializing ${APP.symbol} ${APP.interval}...`);
-
-    while (allCandles.length < APP.historyTarget) {
-        const batch = await fetchKlinesBatch(endTime);
-        if (batch.length === 0) break;
-
-        allCandles = [...batch, ...allCandles];
-        allCandles.sort((a, b) => a.time - b.time);
-        allCandles = allCandles.filter((v, i, a) => i === 0 || v.time > a[i - 1].time);
-
-        endTime = allCandles[0].time * 1000 - 1;
-        if (allCandles.length % 5000 === 0) addToLog(`Loaded ${allCandles.length} candles...`);
+        const res = await fetch(dbUrl);
+        if (res.ok) {
+            const data = await res.json();
+            if (data && data.candles && data.candles.length > 0) {
+                return data.candles.map(c => ({
+                    time: typeof c.time === 'string' ? parseInt(c.time, 10) : c.time,
+                    open: parseFloat(c.open),
+                    high: parseFloat(c.high),
+                    low: parseFloat(c.low),
+                    close: parseFloat(c.close),
+                    volume: parseFloat(c.volume || 0),
+                    buyVolume: (parseFloat(c.volume || 0) + parseFloat(c.volume_delta || 0)) / 2,
+                    sellVolume: (parseFloat(c.volume || 0) - parseFloat(c.volume_delta || 0)) / 2,
+                    delta: parseFloat(c.volume_delta || 0),
+                    txnCount: c.txn_count ? parseInt(c.txn_count, 10) : 0
+                }));
+            }
+        }
+    } catch (err) {
+        console.warn("[DataService] Local DB unavailable, falling back to Binance REST:", err.message);
     }
 
-    state.update(s => ({ ...s, candles: allCandles }));
+    // 2. Fallback to Binance REST API
+    return await fetchKlinesBatch(endTime);
+}
+
+/**
+ * Initial fast load pipeline with capped candle count
+ */
+export async function runFullLoadPipeline() {
+    await ensureWasm();
+    state.update(s => ({ 
+        ...s, 
+        loading: true, 
+        candles: [], 
+        hasMoreHistory: true,
+        isLoadingMore: false 
+    }));
+
+    addToLog(`Loading initial ${APP.initialCap} candles (${APP.symbol} ${APP.interval})...`);
+
+    const initialCandles = await fetchCandlesBatch({
+        symbol: APP.symbol,
+        limit: APP.initialCap,
+        endTime: null
+    });
+
+    initialCandles.sort((a, b) => a.time - b.time);
+    const cleanCandles = initialCandles.filter((v, i, a) => i === 0 || v.time > a[i - 1].time);
+
+    state.update(s => ({ 
+        ...s, 
+        candles: cleanCandles, 
+        loading: false,
+        dataSourceStatus: cleanCandles.length > 0 ? 'Connected (Local DB/API)' : 'Connecting...'
+    }));
+
+    addToLog(`Loaded ${cleanCandles.length} candles instantly. Starting live feed & analysis.`);
     manualRefresh();
 
     startWebSocket({
         onTick: (_candle) => {
-            state.update(s => {
-                return s;
-            });
+            state.update(s => s);
         }
     });
+}
 
-    state.update(s => ({ ...s, loading: false }));
-    addToLog(`Ready. Analysis complete.`);
+/**
+ * Lazy loading of older historical candles when scrolling left
+ */
+export async function loadOlderCandles() {
+    let currentCandles = [];
+    let isAlreadyLoading = false;
+    let hasMore = true;
+
+    state.update(s => {
+        currentCandles = s.candles;
+        isAlreadyLoading = s.isLoadingMore;
+        hasMore = s.hasMoreHistory;
+        return s;
+    });
+
+    if (isAlreadyLoading || !hasMore || currentCandles.length === 0) return;
+
+    state.update(s => ({ ...s, isLoadingMore: true }));
+    const earliestTime = currentCandles[0].time * 1000 - 1;
+
+    try {
+        const olderBatch = await fetchCandlesBatch({
+            symbol: APP.symbol,
+            limit: APP.chunkSize,
+            endTime: earliestTime
+        });
+
+        if (!olderBatch || olderBatch.length === 0) {
+            state.update(s => ({ ...s, isLoadingMore: false, hasMoreHistory: false }));
+            addToLog("Reached beginning of available historical data.");
+            return;
+        }
+
+        olderBatch.sort((a, b) => a.time - b.time);
+        
+        state.update(s => {
+            const combined = [...olderBatch, ...s.candles];
+            const deduped = combined.filter((v, i, a) => i === 0 || v.time > a[i - 1].time);
+            return {
+                ...s,
+                candles: deduped,
+                isLoadingMore: false
+            };
+        });
+
+        addToLog(`Loaded +${olderBatch.length} historical candles (Total in view: ${currentCandles.length + olderBatch.length})`);
+    } catch (e) {
+        console.error("Error loading older candles:", e);
+        state.update(s => ({ ...s, isLoadingMore: false }));
+    }
+}
+
+/**
+ * Retrieve full historical candle dataset (240k+ candles) for backtesting
+ */
+export async function getFullHistoricalCandles() {
+    if (cachedFullHistory && cachedFullHistorySymbol === APP.symbol && cachedFullHistory.length > 10000) {
+        return cachedFullHistory;
+    }
+
+    addToLog(`Fetching complete multi-year history for backtest engine...`);
+    try {
+        const res = await fetch(`/api/db/klines?symbol=${APP.symbol}&exchange=binance&limit=250000`);
+        if (res.ok) {
+            const data = await res.json();
+            if (data && data.candles && data.candles.length > 0) {
+                const fullCandles = data.candles.map(c => ({
+                    time: typeof c.time === 'string' ? parseInt(c.time, 10) : c.time,
+                    open: parseFloat(c.open),
+                    high: parseFloat(c.high),
+                    low: parseFloat(c.low),
+                    close: parseFloat(c.close),
+                    volume: parseFloat(c.volume || 0),
+                    buyVolume: (parseFloat(c.volume || 0) + parseFloat(c.volume_delta || 0)) / 2,
+                    sellVolume: (parseFloat(c.volume || 0) - parseFloat(c.volume_delta || 0)) / 2,
+                    delta: parseFloat(c.volume_delta || 0)
+                }));
+                fullCandles.sort((a, b) => a.time - b.time);
+                cachedFullHistory = fullCandles;
+                cachedFullHistorySymbol = APP.symbol;
+                addToLog(`Cached full history: ${fullCandles.length} candles (2019-Present)`);
+                return fullCandles;
+            }
+        }
+    } catch (err) {
+        console.warn("Full history fetch from DB failed, falling back to current visual slice:", err);
+    }
+
+    let current = [];
+    state.update(s => { current = s.candles; return s; });
+    return current;
 }
 
 export async function manualRefresh() {
@@ -85,7 +221,6 @@ export async function manualRefresh() {
         };
 
         // --- LLAMADA A RUST (WASM) CON FALLBACK JS ---
-        console.time("Rust SMC Analysis");
         let rustResult = { zones: [], trades: [] };
         try {
             const res = analyze_market_wasm(candles, config.sensitivity, config.historyTarget, 2.0);
@@ -95,7 +230,6 @@ export async function manualRefresh() {
         } catch (e) {
             console.warn("Wasm no disponible o error en Rust, usando fallback JS:", e);
         }
-        console.timeEnd("Rust SMC Analysis");
         
         // Fallback a JS si Rust no devolvió zonas
         if (!rustResult.zones || rustResult.zones.length === 0) {
@@ -153,68 +287,93 @@ export function runSelectedStrategy(stratName) {
     manualRefresh();
 }
 
+/**
+ * Execute strategy with Full History support
+ */
 export async function executeStrategy(mode = 'standard') {
     await ensureWasm();
-    state.update(s => {
-        if (s.candles.length === 0) return s;
+    let isFullHistory = true;
+    state.update(s => { isFullHistory = s.fullHistoryBacktest; return s; });
 
-        const strategyResult = runLiquidityStrategy(s.candles, mode, {
-            useVolumeAnalysis: s.useVolumeAnalysis,
-            config: {
-                sensitivity: APP.sensitivity,
-                historyTarget: APP.historyTarget,
-                fractalStrength: s.fractalStrength,
-                angleFilter: s.angleFilter
-            }
-        });
+    addToLog(`Running strategy [${mode}] ${isFullHistory ? '(Full 240k+ History)' : '(Visual Range)'}...`);
+    const dataset = isFullHistory ? await getFullHistoricalCandles() : (await new Promise(res => {
+        state.update(s => { res(s.candles); return s; });
+    }));
 
-        const trades = strategyResult.trades || [];
+    if (!dataset || dataset.length === 0) return;
 
-        const pnlRes = calculatePnLMetrics(trades, s.candles, {
-            initialBalance: s.initialBalance,
-            includeFees: s.includeFees,
-            feeMaker: s.feeMaker,
-            feeTaker: s.feeTaker
-        });
+    let currentState = {};
+    state.update(s => { currentState = s; return s; });
 
-        return {
-            ...s,
-            trades,
-            pnlMetrics: { ...s.pnlMetrics, ...pnlRes.metrics },
-            equityCurve: pnlRes.equityCurve,
-            pnlLocked: false
-        };
+    const strategyResult = runLiquidityStrategy(dataset, mode, {
+        useVolumeAnalysis: currentState.useVolumeAnalysis,
+        config: {
+            sensitivity: APP.sensitivity,
+            historyTarget: dataset.length,
+            fractalStrength: currentState.fractalStrength,
+            angleFilter: currentState.angleFilter
+        }
     });
+
+    const trades = strategyResult.trades || [];
+    const pnlRes = calculatePnLMetrics(trades, dataset, {
+        initialBalance: currentState.initialBalance,
+        includeFees: currentState.includeFees,
+        feeMaker: currentState.feeMaker,
+        feeTaker: currentState.feeTaker
+    });
+
+    state.update(s => ({
+        ...s,
+        trades,
+        pnlMetrics: { ...s.pnlMetrics, ...pnlRes.metrics },
+        equityCurve: pnlRes.equityCurve,
+        pnlLocked: false
+    }));
+
+    addToLog(`Strategy [${mode}] executed: ${trades.length} trades evaluated across ${dataset.length} candles. WinRate: ${pnlRes.metrics.winRate}%`);
 }
 
+/**
+ * Execute Rust Wasm Optimizer across Full History
+ */
 export async function executeOptimizer() {
     await ensureWasm();
-    state.update(s => {
-        if (s.candles.length === 0) return s;
-        
-        console.time("Rust Optimizer");
-        let results = [];
-        try {
-            results = run_optimizer_wasm(s.candles, APP.sensitivity) || [];
-        } catch (e) {
-            console.warn("Wasm optimizer error o no disponible, usando fallback JS:", e);
-        }
-        console.timeEnd("Rust Optimizer");
+    let isFullHistory = true;
+    state.update(s => { isFullHistory = s.fullHistoryBacktest; return s; });
 
-        if (!results || results.length === 0) {
-            results = runOptimizer(s.candles, {
-                useVolumeAnalysis: s.useVolumeAnalysis,
-                config: {
-                    sensitivity: APP.sensitivity,
-                    historyTarget: APP.historyTarget,
-                    fractalStrength: s.fractalStrength,
-                    angleFilter: s.angleFilter
-                }
-            }) || [];
-        }
+    addToLog(`Running Rust Wasm Optimizer ${isFullHistory ? '(Full History)' : '(Active Slice)'}...`);
+    const dataset = isFullHistory ? await getFullHistoricalCandles() : (await new Promise(res => {
+        state.update(s => { res(s.candles); return s; });
+    }));
 
-        return { ...s, optimizerResults: results };
-    });
+    if (!dataset || dataset.length === 0) return;
+
+    console.time("Rust Optimizer Full Dataset");
+    let results = [];
+    try {
+        results = run_optimizer_wasm(dataset, APP.sensitivity) || [];
+    } catch (e) {
+        console.warn("Wasm optimizer error, using JS fallback:", e);
+    }
+    console.timeEnd("Rust Optimizer Full Dataset");
+
+    if (!results || results.length === 0) {
+        let currentState = {};
+        state.update(s => { currentState = s; return s; });
+        results = runOptimizer(dataset, {
+            useVolumeAnalysis: currentState.useVolumeAnalysis,
+            config: {
+                sensitivity: APP.sensitivity,
+                historyTarget: dataset.length,
+                fractalStrength: currentState.fractalStrength,
+                angleFilter: currentState.angleFilter
+            }
+        }) || [];
+    }
+
+    state.update(s => ({ ...s, optimizerResults: results }));
+    addToLog(`Optimizer finished: ${results.length} setups evaluated across ${dataset.length} candles.`);
 }
 
 export function applyOptimizerSelection(modeKey) {
@@ -284,3 +443,4 @@ export function updatePnL() {
         };
     });
 }
+

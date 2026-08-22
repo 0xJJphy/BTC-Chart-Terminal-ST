@@ -123,8 +123,24 @@
         };
         window.addEventListener("resize", handleResize);
 
-        // Local variable to track if we've done initial set
+        // Infinite scroll / pagination subscription
+        let rangeDebounce = null;
+        chart.timeScale().subscribeVisibleLogicalRangeChange((logicalRange) => {
+            if (!logicalRange) return;
+            if (logicalRange.from < 50) {
+                if (rangeDebounce) clearTimeout(rangeDebounce);
+                rangeDebounce = setTimeout(() => {
+                    import("../lib/logic/app_controller.js").then((m) => {
+                        m.loadOlderCandles();
+                    });
+                }, 120);
+            }
+        });
+
+        // Track previous candle state for seamless prepend
         let initialDataLoaded = false;
+        let prevCandlesCount = 0;
+        let prevEarliestTime = null;
 
         // Subscribe to state changes
         const unsubscribe = state.subscribe((s) => {
@@ -154,7 +170,48 @@
                         })),
                     );
                     initialDataLoaded = true;
+                    prevCandlesCount = s.candles.length;
+                    prevEarliestTime = s.candles[0].time;
+                } else if (prevEarliestTime !== null && s.candles[0].time < prevEarliestTime) {
+                    // Prepend event: historical candles added to the left
+                    const addedCount = s.candles.length - prevCandlesCount;
+                    const timeScale = chart.timeScale();
+                    const logicalRange = timeScale.getVisibleLogicalRange();
+
+                    candleSeries.setData(s.candles);
+                    volumeSeries.setData(
+                        s.candles.map((c) => ({
+                            time: c.time,
+                            value: c.volume,
+                            color:
+                                c.close >= c.open
+                                    ? "rgba(8, 153, 129, 0.25)"
+                                    : "rgba(242, 54, 69, 0.25)",
+                        })),
+                    );
+                    deltaSeries.setData(
+                        s.candles.map((c) => ({
+                            time: c.time,
+                            value: Math.abs(c.delta || 0),
+                            color:
+                                (c.delta || 0) >= 0
+                                    ? "rgba(34, 197, 94, 0.8)"
+                                    : "rgba(248, 113, 113, 0.8)",
+                        })),
+                    );
+
+                    // Offset viewport smoothly to prevent visual jumping
+                    if (logicalRange && addedCount > 0) {
+                        timeScale.setVisibleLogicalRange({
+                            from: logicalRange.from + addedCount,
+                            to: logicalRange.to + addedCount,
+                        });
+                    }
+
+                    prevCandlesCount = s.candles.length;
+                    prevEarliestTime = s.candles[0].time;
                 } else {
+                    // Live real-time tick update
                     const lastCandle = s.candles[s.candles.length - 1];
                     candleSeries.update(lastCandle);
                     volumeSeries.update({
@@ -173,6 +230,8 @@
                                 ? "rgba(34, 197, 94, 0.8)"
                                 : "rgba(248, 113, 113, 0.8)",
                     });
+                    prevCandlesCount = s.candles.length;
+                    prevEarliestTime = s.candles[0].time;
                 }
             }
 
@@ -285,6 +344,15 @@
                 class="text-[9px] text-white/80 font-bold uppercase hover:text-white"
                 >Exit View</button
             >
+        </div>
+    {/if}
+
+    {#if $state.isLoadingMore}
+        <div
+            class="absolute top-4 left-4 bg-black/80 backdrop-blur px-3 py-1.5 rounded-lg border border-accent/40 shadow-xl flex items-center space-x-2 z-40 text-accent text-[10px] font-mono animate-pulse"
+        >
+            <i class="fas fa-spinner fa-spin text-xs"></i>
+            <span>Loading older history...</span>
         </div>
     {/if}
 </div>

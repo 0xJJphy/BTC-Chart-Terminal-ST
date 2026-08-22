@@ -59,6 +59,11 @@
             </button>
         {/if}
 
+        <div class="hidden md:flex items-center gap-2 bg-black/20 px-2.5 py-1 rounded border border-border/40 text-[10px] font-mono text-slate-400">
+            <i class="fas fa-database text-[9px] text-accent"></i>
+            <span>{$state.candles.length.toLocaleString()} candles in view</span>
+        </div>
+
         <div class="flex flex-col items-end">
             <span class="text-[9px] text-slate-500 font-bold uppercase"
                 >Live Price</span

@@ -3,14 +3,22 @@ import { writable } from 'svelte/store';
 export const APP = {
     symbol: 'BTCUSDT',
     interval: '15m',
-    historyTarget: 30000,
+    initialCap: 2000,
+    chunkSize: 2000,
+    historyTarget: 2000,
     limitPerReq: 1000,
     sensitivity: 0.0001,
-    riskReward: 2
+    riskReward: 2,
+    dataSource: 'local_db' // 'local_db' | 'local_parquet' | 'binance_live'
 };
 
 export const state = writable({
     loading: true,
+    isLoadingMore: false,
+    hasMoreHistory: true,
+    fullHistoryBacktest: true,
+    dataSource: 'local_db',
+    dataSourceStatus: 'Ready',
     candles: [],
     zones: [],
     trades: [],
@@ -46,9 +54,9 @@ export const state = writable({
     fractalStrength: 5,
     angleFilter: true,
     angleMax: 50,
-    showBrokenLines: false, // New variable
-    regPeriod: 200,         // New variable
-    regStd: 2.0,           // New variable
+    showBrokenLines: false,
+    regPeriod: 200,
+    regStd: 2.0,
     useVolumeAnalysis: false,
     includeFees: false,
     feeMaker: 0.1,
@@ -60,3 +68,4 @@ export const logs = writable(['Terminal initialized. Ready for analysis.']);
 export function addToLog(msg) {
     logs.update(l => [`> ${msg}`, ...l]);
 }
+
