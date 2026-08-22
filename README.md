@@ -20,34 +20,45 @@ A high-performance, institutional-grade cryptocurrency analysis terminal rebuilt
   - Context-aware replay that preserves the exact market state (zones, lines) of the historical setup.
 - **Performance Metrics**: Real-time calculation of Win Rate, Profit Factor, Sharpe Ratio, and Equity Curve.
 
-## 🛠️ Installation
+## 🛠️ Installation & Execution
 
-1. **Clone the repository**:
+### Option A: Isolated Docker Environment (Recommended)
+Runs the entire stack (Rust Wasm compiler, DuckDB, Node.js API, and Vite UI) in an isolated container connected to `gli_postgres` without installing dependencies on your host:
+
+```bash
+# Start container with automatic post-build image prune
+npm run docker:up
+# Or with Make:
+make docker-up
+```
+Open **http://localhost:5173** in your browser.
+
+To stop or clean:
+```bash
+npm run docker:down    # Stop container
+npm run docker:clean   # Reclaim build cache & dangling images
+```
+
+### Option B: Local Native Environment
+1. **Copy environment variables**:
    ```bash
-   git clone https://github.com/your-username/BTC-Chart-Terminal-ST.git
-   cd BTC-Chart-Terminal-ST
+   cp .env.example .env
    ```
-
-2. **Install dependencies**:
+2. **Build WebAssembly engine & install dependencies**:
    ```bash
+   npm run build:wasm
    npm install
    ```
-
-3. **Run the development server**:
+3. **Start development server**:
    ```bash
    npm run dev
    ```
 
-4. **Build for production**:
-   ```bash
-   npm run build
-   ```
-
-## 🖥️ Usage
-
-- **SMC Explorer**: Toggle FVG/OB visibility, adjust detection sensitivity, and filter mitigated zones.
-- **Trade Terminal**: Select your preferred strategy from the dropdown (SMC, TL Trap, etc.) to generate trade ideas.
-- **Replay**: Click any trade in the "History" or "Ideas" tab to instantly replay the setup on the chart.
+## 🔌 Institutional Data Integrations (Local API)
+The terminal includes a built-in API proxy providing access to:
+- **PostgreSQL (`alt_scraper`)**: 240k+ 15m candles with order flow volume delta and Binance/Bybit/OKX futures metrics (Long/Short ratio, Open Interest, Liquidations).
+- **PostgreSQL (`gli_dashboard`)**: Hyperliquid order book L2 depth, perp context, and Deribit options Greeks (GEX / DEX).
+- **Parquet Storage (`DuckDB`)**: Direct, sub-millisecond query access to 1-minute historical datasets from `GLI-CLI-Estimation`.
 
 ## 🤝 Contributing
 

@@ -1,11 +1,18 @@
 @echo off
 echo ========================================================
-echo Installing dependencies for BTC Chart Terminal...
+echo   BTC Quant Terminal - Setup & Environment Init
 echo ========================================================
+
+if not exist ".env" (
+    if exist ".env.example" (
+        echo [INFO] Creating .env from .env.example...
+        copy .env.example .env >nul
+    )
+)
 
 where wasm-pack >nul 2>nul
 if %errorlevel% equ 0 (
-    echo Compiling Rust engine to WebAssembly...
+    echo [INFO] Compiling Rust engine to WebAssembly...
     cd src-rust
     wasm-pack build --target web --out-dir ..\src\lib\wasm
     cd ..
@@ -17,11 +24,22 @@ if %errorlevel% equ 0 (
 )
 
 echo.
-echo Installing npm packages...
+echo [INFO] Installing npm packages...
 call npm install
+
+echo.
+where docker >nul 2>nul
+if %errorlevel% equ 0 (
+    echo [INFO] Docker detected. Running post-install image prune to maintain clean disk...
+    docker image prune -f >nul 2>&1
+)
+
 echo.
 echo ========================================================
 echo Setup complete.
-echo You can run the application with: npm run dev
+echo - Native dev server: npm run dev
+echo - Isolated Docker:   npm run docker:up
+echo - Docker rebuild:    npm run docker:rebuild
 echo ========================================================
 pause
+

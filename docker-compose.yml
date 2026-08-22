@@ -1,0 +1,33 @@
+﻿version: '3.8'
+
+services:
+  btc-terminal:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: btc_chart_terminal
+    restart: unless-stopped
+    ports:
+      - "5173:5173"
+      - "3001:3001"
+    environment:
+      - GLI_DB_HOST=gli_postgres
+      - GLI_DB_PORT=5432
+      - GLI_DB_USER=gli_user
+      - GLI_DB_PASSWORD=password
+      - GLI_DB_ALT_SCRAPER=alt_scraper
+      - GLI_DB_DASHBOARD=gli_dashboard
+      - GLI_PARQUET_BASE_DIR=/data/research
+      - GLI_PARQUET_KLINES_1M=/data/research/binance_klines1m
+      - GLI_PARQUET_SPOT_1M=/data/research/binance_spot_klines1m
+      - GLI_PARQUET_METRICS=/data/research/binance_metrics
+      - API_PORT=3001
+    volumes:
+      - ../GLI-CLI-Estimation/backend/research/data:/data/research:ro
+    networks:
+      - gli_net
+
+networks:
+  gli_net:
+    external: true
+    name: gli-cli-estimation_default

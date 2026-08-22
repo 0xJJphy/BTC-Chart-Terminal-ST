@@ -6,7 +6,7 @@ NODE_BIN := $(shell if [ -d "$(FNM_NODE_BIN)" ]; then echo "$(FNM_NODE_BIN)"; el
 NPM := $(shell if [ -x "$(NODE_BIN)/npm" ]; then echo "$(NODE_BIN)/npm"; else which npm 2>/dev/null || echo "npm"; fi)
 export PATH := $(NODE_BIN):$(HOME)/.cargo/bin:$(PATH)
 
-.PHONY: help setup dev build preview env-check build-wasm
+.PHONY: help setup dev build preview env-check build-wasm docker-up docker-down docker-rebuild docker-clean docker-logs
 
 help:
 	@echo ""
@@ -18,7 +18,13 @@ help:
 	@echo "  make build          Generar build de producción"
 	@echo "  make preview        Previsualizar build de producción"
 	@echo "  make env-check      Verificar entorno (Node/NPM/Rust)"
+	@echo "  make docker-up      Levantar contenedor Docker aislado con auto-clean"
+	@echo "  make docker-down    Detener contenedor Docker"
+	@echo "  make docker-rebuild Reconstruir imagen Docker y purgar capas intermedias"
+	@echo "  make docker-clean   Limpiar imágenes huérfanas y caché de compilación"
+	@echo "  make docker-logs    Ver logs del contenedor en tiempo real"
 	@echo ""
+
 
 build-wasm:
 	@echo "→ Compilando Rust a Wasm ..."
@@ -49,3 +55,32 @@ env-check:
 	@rustc --version 2>/dev/null || (if [ -f "$$HOME/.cargo/env" ]; then . "$$HOME/.cargo/env" && rustc --version; else echo "Rust no encontrado"; fi)
 	@echo "--- wasm-pack ---"
 	@wasm-pack --version 2>/dev/null || (if [ -f "$$HOME/.cargo/env" ]; then . "$$HOME/.cargo/env" && wasm-pack --version; else echo "wasm-pack no encontrado"; fi)
+
+docker-up:
+	@echo "→ Levantando contenedor btc-terminal..."
+	@docker compose up -d
+	@docker image prune -f >/dev/null 2>&1 || true
+	@echo "✓ Contenedor activo en http://localhost:5173"
+
+docker-down:
+	@echo "→ Deteniendo contenedor btc-terminal..."
+	@docker compose down
+	@echo "✓ Contenedor detenido"
+
+docker-rebuild:
+	@echo "→ Reconstruyendo imagen btc-terminal..."
+	@docker compose build --no-cache
+	@docker compose up -d
+	@docker image prune -f >/dev/null 2>&1 || true
+	@docker builder prune -f --filter "until=24h" >/dev/null 2>&1 || true
+	@echo "✓ Rebuild completado y capas intermedias purgadas"
+
+docker-clean:
+	@echo "→ Ejecutando limpieza segura de Docker..."
+	@docker image prune -f
+	@docker builder prune -f --filter "until=24h"
+	@echo "✓ Limpieza completada"
+
+docker-logs:
+	@docker compose logs -f btc-terminal
+
