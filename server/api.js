@@ -139,6 +139,46 @@ export async function handleApiRequest(req, res) {
                 params.push(endTime);
             }
 
+            if (interval === '1m') {
+                const targetDir = PARQUET_DIR.replace(/\\/g, '/');
+                const globPattern = `${targetDir}/${symbol}_*.parquet`;
+                let duckSql = `
+                    SELECT 
+                        (open_time / 1000)::BIGINT as time,
+                        open::FLOAT as open,
+                        high::FLOAT as high,
+                        low::FLOAT as low,
+                        close::FLOAT as close,
+                        volume::FLOAT as volume,
+                        quote_volume::FLOAT as volume_usd,
+                        (taker_buy_volume * 2 - volume)::FLOAT as volume_delta,
+                        count::BIGINT as txn_count
+                    FROM '${globPattern}'
+                `;
+                if (endTime) {
+                    const endTsMs = typeof query.endTime === 'string' && query.endTime.length > 10 ? parseInt(query.endTime, 10) : endTime.getTime();
+                    duckSql += ` WHERE open_time <= ${endTsMs}`;
+                }
+                duckSql += ` ORDER BY open_time DESC LIMIT ${limit}`;
+
+                try {
+                    const rows = await queryDuck(duckSql);
+                    if (rows && rows.length > 0) {
+                        const candles = rows.reverse();
+                        return sendJson(res, 200, {
+                            symbol,
+                            exchange: 'binance',
+                            interval: '1m',
+                            source: 'parquet_duckdb',
+                            count: candles.length,
+                            candles,
+                        });
+                    }
+                } catch (duckErr) {
+                    console.warn('[API] DuckDB 1m parquet query error, falling back to DB/Binance:', duckErr.message);
+                }
+            }
+
             if (interval === '1h') {
                 sql = `
                     SELECT 
@@ -203,17 +243,49 @@ export async function handleApiRequest(req, res) {
                 symbol,
                 exchange,
                 interval,
+                source: 'postgres_db',
                 count: candles.length,
                 candles,
             });
         }
 
-        // 3. Metrics: Long/Short Ratio, OI, Funding, Liquidations
-        if (pathname === '/db/metrics/futures') {
+        // 3. Metrics: Long/Short Ratio, OI, Funding, Liquidations (Parquets + DB)
+        if (pathname === '/db/metrics/futures' || pathname === '/metrics/longshort') {
             const symbol = (query.symbol || 'BTCUSDT').toUpperCase();
-            const exchange = query.exchange ? query.exchange.toLowerCase() : null;
-            const limit = Math.min(parseInt(query.limit || '500', 10), 2000);
+            const limit = Math.min(parseInt(query.limit || '500', 10), 5000);
 
+            // Try binance_metrics parquets first
+            const metricsDir = (process.env.GLI_PARQUET_METRICS || 'C:/Users/Pedro/Documents/GitHub/GLI-CLI-Estimation/backend/research/data/binance_metrics').replace(/\\/g, '/');
+            const globMetrics = `${metricsDir}/${symbol}_*.parquet`;
+
+            try {
+                const duckSql = `
+                    SELECT 
+                        create_time,
+                        sum_open_interest::FLOAT as open_interest,
+                        sum_open_interest_value::FLOAT as open_interest_usd,
+                        count_toptrader_long_short_ratio::FLOAT as ls_acc_top,
+                        sum_toptrader_long_short_ratio::FLOAT as ls_pos_top,
+                        count_long_short_ratio::FLOAT as ls_acc_global,
+                        sum_taker_long_short_vol_ratio::FLOAT as taker_ls_vol_ratio
+                    FROM '${globMetrics}'
+                    ORDER BY create_time DESC
+                    LIMIT ${limit}
+                `;
+                const rows = await queryDuck(duckSql);
+                if (rows && rows.length > 0) {
+                    return sendJson(res, 200, {
+                        symbol,
+                        source: 'parquet_metrics_duckdb',
+                        count: rows.length,
+                        metrics: rows.reverse(),
+                    });
+                }
+            } catch (err) {
+                console.warn('[API] DuckDB metrics parquet fallback to DB:', err.message);
+            }
+
+            // Fallback to PostgreSQL futures_daily_metrics
             let sql = `
                 SELECT 
                     date,
@@ -232,21 +304,64 @@ export async function handleApiRequest(req, res) {
                     volume_delta::FLOAT
                 FROM futures_daily_metrics
                 WHERE symbol = $1
+                ORDER BY date DESC LIMIT $2
             `;
-            const params = [symbol];
-            if (exchange) {
-                sql += ` AND exchange = $2 ORDER BY date DESC LIMIT $3`;
-                params.push(exchange, limit);
-            } else {
-                sql += ` ORDER BY date DESC LIMIT $2`;
-                params.push(limit);
-            }
-
-            const result = await poolAltScraper.query(sql, params);
+            const result = await poolAltScraper.query(sql, [symbol, limit]);
             return sendJson(res, 200, {
                 symbol,
+                source: 'postgres_db',
                 count: result.rows.length,
                 metrics: result.rows.reverse(),
+            });
+        }
+
+        // 4. Order Book Depth & Imbalance (binance_bookdepth Parquet + DB)
+        if (pathname === '/orderbook/depth' || pathname === '/db/orderbook') {
+            const symbol = (query.symbol || 'BTCUSDT').toUpperCase();
+            const bookDepthDir = path.dirname(PARQUET_DIR).replace(/\\/g, '/') + '/binance_bookdepth';
+            const depthFile = `${bookDepthDir}/${symbol}.parquet`;
+
+            if (fs.existsSync(depthFile)) {
+                try {
+                    const duckSql = `
+                        SELECT 
+                            date,
+                            percentage,
+                            notional_med::FLOAT,
+                            notional_p10::FLOAT,
+                            notional_p90::FLOAT,
+                            depth_med::FLOAT,
+                            n_snapshots::BIGINT
+                        FROM '${depthFile}'
+                        ORDER BY date DESC, percentage ASC
+                        LIMIT 50
+                    `;
+                    const rows = await queryDuck(duckSql);
+                    if (rows && rows.length > 0) {
+                        return sendJson(res, 200, {
+                            symbol,
+                            source: 'parquet_bookdepth_duckdb',
+                            count: rows.length,
+                            depth_profile: rows,
+                        });
+                    }
+                } catch (e) {
+                    console.warn('[API] DuckDB bookdepth error:', e.message);
+                }
+            }
+
+            // Fallback to PostgreSQL orderbook_daily_metrics
+            const sql = `
+                SELECT * FROM orderbook_daily_metrics 
+                WHERE symbol = $1 
+                ORDER BY date DESC 
+                LIMIT 1
+            `;
+            const result = await poolAltScraper.query(sql, [symbol]);
+            return sendJson(res, 200, {
+                symbol,
+                source: 'postgres_db',
+                orderbook_metrics: result.rows[0] || null,
             });
         }
 
