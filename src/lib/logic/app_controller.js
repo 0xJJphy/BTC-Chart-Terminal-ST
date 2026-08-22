@@ -6,6 +6,22 @@ import { runLiquidityStrategy, runOptimizer } from './liquidity.js';
 import { calculatePnLMetrics } from './pnl.js';
 import { zoomRange, prepareReplayData } from './replay.js';
 
+// Rust Wasm Engine
+import init, { analyze_market_wasm, run_optimizer_wasm } from '../wasm/btc_engine.js';
+
+let wasmReady = false;
+async function ensureWasm() {
+    if (!wasmReady) {
+        try {
+            await init();
+            wasmReady = true;
+            console.log("🚀 Motor Rust (Wasm) inicializado correctamente");
+        } catch (e) {
+            console.error("Fallo al inicializar Wasm:", e);
+        }
+    }
+}
+
 let chartReference = null;
 
 export function setChartReference(chart) {
@@ -13,6 +29,7 @@ export function setChartReference(chart) {
 }
 
 export async function runFullLoadPipeline() {
+    await ensureWasm(); 
     state.update(s => ({ ...s, loading: true, candles: [] }));
     let endTime = null;
     let allCandles = [];
@@ -35,10 +52,8 @@ export async function runFullLoadPipeline() {
     manualRefresh();
 
     startWebSocket({
-        onTick: (candle) => {
+        onTick: (_candle) => {
             state.update(s => {
-                const candles = s.candles;
-                // Periodic light analysis on tick if needed
                 return s;
             });
         }
@@ -48,7 +63,8 @@ export async function runFullLoadPipeline() {
     addToLog(`Ready. Analysis complete.`);
 }
 
-export function manualRefresh() {
+export async function manualRefresh() {
+    await ensureWasm();
     state.update(s => {
         const candles = s.candles;
         if (candles.length === 0) return s;
@@ -65,10 +81,31 @@ export function manualRefresh() {
             ...config,
             strictMode: true,
             showHistory: true,
-            tolerance: 1 // Ported from terminal.html default
+            tolerance: 1 
         };
 
-        const zonesData = analyzeSMC(candles, indicatorConfig);
+        // --- LLAMADA A RUST (WASM) CON FALLBACK JS ---
+        console.time("Rust SMC Analysis");
+        let rustResult = { zones: [], trades: [] };
+        try {
+            const res = analyze_market_wasm(candles, config.sensitivity, config.historyTarget, 2.0);
+            if (res && res.zones && res.zones.length > 0) {
+                rustResult = res;
+            }
+        } catch (e) {
+            console.warn("Wasm no disponible o error en Rust, usando fallback JS:", e);
+        }
+        console.timeEnd("Rust SMC Analysis");
+        
+        // Fallback a JS si Rust no devolvió zonas
+        if (!rustResult.zones || rustResult.zones.length === 0) {
+            const zonesData = analyzeSMC(candles, indicatorConfig);
+            rustResult = {
+                zones: zonesData.zones || [],
+                trades: zonesData.trades || []
+            };
+        }
+        
         const lines = calculateTrendLines(candles, indicatorConfig);
         const channel = calculateRegLin(candles, {
             ...indicatorConfig,
@@ -77,10 +114,9 @@ export function manualRefresh() {
         });
         const hurst = calculateHurst(candles);
 
-        // Strategy Selection Logic
         let trades = [];
         if (s.activeStrategy === 'SMC') {
-            trades = zonesData.trades;
+            trades = rustResult.trades || []; 
         } else {
             const modeMap = {
                 'TL_TRAP': 'standard',
@@ -96,12 +132,12 @@ export function manualRefresh() {
                 useVolumeAnalysis: s.useVolumeAnalysis,
                 config: indicatorConfig
             });
-            trades = strategyResult.trades;
+            trades = strategyResult.trades || [];
         }
 
         return {
             ...s,
-            zones: zonesData.zones,
+            zones: rustResult.zones || [], 
             trades: trades,
             lines,
             channel,
@@ -117,11 +153,12 @@ export function runSelectedStrategy(stratName) {
     manualRefresh();
 }
 
-export function executeStrategy(mode = 'standard') {
+export async function executeStrategy(mode = 'standard') {
+    await ensureWasm();
     state.update(s => {
         if (s.candles.length === 0) return s;
 
-        const trades = runLiquidityStrategy(s.candles, mode, {
+        const strategyResult = runLiquidityStrategy(s.candles, mode, {
             useVolumeAnalysis: s.useVolumeAnalysis,
             config: {
                 sensitivity: APP.sensitivity,
@@ -130,6 +167,8 @@ export function executeStrategy(mode = 'standard') {
                 angleFilter: s.angleFilter
             }
         });
+
+        const trades = strategyResult.trades || [];
 
         const pnlRes = calculatePnLMetrics(trades, s.candles, {
             initialBalance: s.initialBalance,
@@ -148,18 +187,32 @@ export function executeStrategy(mode = 'standard') {
     });
 }
 
-export function executeOptimizer() {
+export async function executeOptimizer() {
+    await ensureWasm();
     state.update(s => {
         if (s.candles.length === 0) return s;
-        const results = runOptimizer(s.candles, {
-            useVolumeAnalysis: s.useVolumeAnalysis,
-            config: {
-                sensitivity: APP.sensitivity,
-                historyTarget: APP.historyTarget,
-                fractalStrength: s.fractalStrength,
-                angleFilter: s.angleFilter
-            }
-        });
+        
+        console.time("Rust Optimizer");
+        let results = [];
+        try {
+            results = run_optimizer_wasm(s.candles, APP.sensitivity) || [];
+        } catch (e) {
+            console.warn("Wasm optimizer error o no disponible, usando fallback JS:", e);
+        }
+        console.timeEnd("Rust Optimizer");
+
+        if (!results || results.length === 0) {
+            results = runOptimizer(s.candles, {
+                useVolumeAnalysis: s.useVolumeAnalysis,
+                config: {
+                    sensitivity: APP.sensitivity,
+                    historyTarget: APP.historyTarget,
+                    fractalStrength: s.fractalStrength,
+                    angleFilter: s.angleFilter
+                }
+            }) || [];
+        }
+
         return { ...s, optimizerResults: results };
     });
 }
@@ -169,7 +222,7 @@ export function applyOptimizerSelection(modeKey) {
         const cfg = s.optimizerResults.find(r => r.key === modeKey);
         if (!cfg) return s;
 
-        const pnlRes = calculatePnLMetrics(cfg.trades, s.candles, {
+        const pnlRes = calculatePnLMetrics(cfg.trades || [], s.candles, {
             initialBalance: s.initialBalance,
             includeFees: s.includeFees,
             feeMaker: s.feeMaker,
@@ -178,7 +231,7 @@ export function applyOptimizerSelection(modeKey) {
 
         return {
             ...s,
-            trades: cfg.trades.map(t => ({ ...t })),
+            trades: (cfg.trades || []).map(t => ({ ...t })),
             pnlMetrics: { ...s.pnlMetrics, ...pnlRes.metrics },
             equityCurve: pnlRes.equityCurve,
             pnlLocked: true,
@@ -217,7 +270,8 @@ export function switchMainTab(tab) {
 
 export function updatePnL() {
     state.update(s => {
-        const pnlRes = calculatePnLMetrics(s.trades, s.candles, {
+        const trades = s.trades || [];
+        const pnlRes = calculatePnLMetrics(trades, s.candles, {
             initialBalance: s.initialBalance,
             includeFees: s.includeFees,
             feeMaker: s.feeMaker,

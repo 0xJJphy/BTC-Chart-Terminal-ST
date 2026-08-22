@@ -119,3 +119,10 @@ dist
 # User specific
 original_code/
 .gemini/
+
+# Rust
+src-rust/target/
+src-rust/pkg/
+
+# Wasm generated bindings
+src/lib/wasm/
