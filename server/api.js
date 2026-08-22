@@ -1,4 +1,4 @@
-﻿import http from 'node:http';
+import http from 'node:http';
 import url from 'node:url';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -116,41 +116,83 @@ export async function handleApiRequest(req, res) {
             });
         }
 
-        // 2. 15m DB Klines (alt_scraper: futures_klines_15m)
+        // 2. Multi-Timeframe DB Klines (alt_scraper: futures_klines_15m + aggregation)
         if (pathname === '/db/klines') {
             const symbol = (query.symbol || 'BTCUSDT').toUpperCase();
             const exchange = (query.exchange || 'binance').toLowerCase();
+            const interval = query.interval || '15m';
             const limit = Math.min(parseInt(query.limit || '5000', 10), 50000);
             const startTime = query.startTime ? new Date(parseInt(query.startTime, 10)) : null;
             const endTime = query.endTime ? new Date(parseInt(query.endTime, 10)) : null;
 
-            let sql = `
-                SELECT 
-                    EXTRACT(EPOCH FROM candle_open_at)::BIGINT as time,
-                    price_open::FLOAT as open,
-                    price_high::FLOAT as high,
-                    price_low::FLOAT as low,
-                    price_close::FLOAT as close,
-                    volume_base::FLOAT as volume,
-                    volume_usd::FLOAT as volume_usd,
-                    volume_delta::FLOAT as volume_delta,
-                    txn_count::BIGINT as txn_count
-                FROM futures_klines_15m
-                WHERE symbol = $1 AND exchange = $2
-            `;
+            let sql = '';
             const params = [symbol, exchange];
             let paramIdx = 3;
 
+            let whereClause = 'WHERE symbol = $1 AND exchange = $2';
             if (startTime) {
-                sql += ` AND candle_open_at >= $${paramIdx++}`;
+                whereClause += ` AND candle_open_at >= $${paramIdx++}`;
                 params.push(startTime);
             }
             if (endTime) {
-                sql += ` AND candle_open_at <= $${paramIdx++}`;
+                whereClause += ` AND candle_open_at <= $${paramIdx++}`;
                 params.push(endTime);
             }
 
-            sql += ` ORDER BY candle_open_at DESC LIMIT $${paramIdx}`;
+            if (interval === '1h') {
+                sql = `
+                    SELECT 
+                        EXTRACT(EPOCH FROM date_trunc('hour', candle_open_at))::BIGINT as time,
+                        (array_agg(price_open::FLOAT ORDER BY candle_open_at ASC))[1] as open,
+                        MAX(price_high::FLOAT) as high,
+                        MIN(price_low::FLOAT) as low,
+                        (array_agg(price_close::FLOAT ORDER BY candle_open_at DESC))[1] as close,
+                        SUM(volume_base::FLOAT) as volume,
+                        SUM(volume_usd::FLOAT) as volume_usd,
+                        SUM(volume_delta::FLOAT) as volume_delta,
+                        SUM(txn_count::BIGINT) as txn_count
+                    FROM futures_klines_15m
+                    ${whereClause}
+                    GROUP BY date_trunc('hour', candle_open_at)
+                    ORDER BY date_trunc('hour', candle_open_at) DESC
+                    LIMIT $${paramIdx}
+                `;
+            } else if (interval === '4h') {
+                sql = `
+                    SELECT 
+                        EXTRACT(EPOCH FROM to_timestamp(floor(EXTRACT(EPOCH FROM candle_open_at) / 14400) * 14400))::BIGINT as time,
+                        (array_agg(price_open::FLOAT ORDER BY candle_open_at ASC))[1] as open,
+                        MAX(price_high::FLOAT) as high,
+                        MIN(price_low::FLOAT) as low,
+                        (array_agg(price_close::FLOAT ORDER BY candle_open_at DESC))[1] as close,
+                        SUM(volume_base::FLOAT) as volume,
+                        SUM(volume_usd::FLOAT) as volume_usd,
+                        SUM(volume_delta::FLOAT) as volume_delta,
+                        SUM(txn_count::BIGINT) as txn_count
+                    FROM futures_klines_15m
+                    ${whereClause}
+                    GROUP BY floor(EXTRACT(EPOCH FROM candle_open_at) / 14400)
+                    ORDER BY time DESC
+                    LIMIT $${paramIdx}
+                `;
+            } else {
+                sql = `
+                    SELECT 
+                        EXTRACT(EPOCH FROM candle_open_at)::BIGINT as time,
+                        price_open::FLOAT as open,
+                        price_high::FLOAT as high,
+                        price_low::FLOAT as low,
+                        price_close::FLOAT as close,
+                        volume_base::FLOAT as volume,
+                        volume_usd::FLOAT as volume_usd,
+                        volume_delta::FLOAT as volume_delta,
+                        txn_count::BIGINT as txn_count
+                    FROM futures_klines_15m
+                    ${whereClause}
+                    ORDER BY candle_open_at DESC 
+                    LIMIT $${paramIdx}
+                `;
+            }
             params.push(limit);
 
             const result = await poolAltScraper.query(sql, params);
@@ -160,6 +202,7 @@ export async function handleApiRequest(req, res) {
             return sendJson(res, 200, {
                 symbol,
                 exchange,
+                interval,
                 count: candles.length,
                 candles,
             });

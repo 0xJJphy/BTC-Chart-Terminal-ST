@@ -31,19 +31,53 @@ export function setChartReference(chart) {
 }
 
 /**
- * Fetch a batch of candles from Local Database with Binance REST fallback
+ * Helper to fetch candles directly from Binance REST API
  */
-export async function fetchCandlesBatch({ symbol = APP.symbol, limit = APP.chunkSize, endTime = null } = {}) {
-    // 1. Try local PostgreSQL DB (alt_scraper: futures_klines_15m)
+async function fetchBinanceRestKlines({ symbol = APP.symbol, interval = APP.interval, limit = 1000, startTime = null, endTime = null } = {}) {
     try {
-        let dbUrl = `/api/db/klines?symbol=${symbol}&exchange=binance&limit=${limit}`;
+        let url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${Math.min(limit, 1000)}`;
+        if (startTime) url += `&startTime=${startTime}`;
+        if (endTime) url += `&endTime=${endTime}`;
+
+        const res = await fetch(url);
+        if (!res.ok) return [];
+        const raw = await res.json();
+        if (!Array.isArray(raw)) return [];
+
+        return raw.map(c => ({
+            time: Math.floor(c[0] / 1000),
+            open: parseFloat(c[1]),
+            high: parseFloat(c[2]),
+            low: parseFloat(c[3]),
+            close: parseFloat(c[4]),
+            volume: parseFloat(c[5]),
+            buyVolume: parseFloat(c[9]),
+            sellVolume: parseFloat(c[5]) - parseFloat(c[9]),
+            delta: parseFloat(c[9]) - (parseFloat(c[5]) - parseFloat(c[9])),
+            txnCount: parseInt(c[8], 10) || 0
+        }));
+    } catch (e) {
+        console.warn("[BinanceREST] Failed to fetch klines:", e.message);
+        return [];
+    }
+}
+
+/**
+ * Fetch a batch of candles with Local Database + Live Binance Gap Synchronization
+ */
+export async function fetchCandlesBatch({ symbol = APP.symbol, interval = APP.interval, limit = APP.chunkSize, endTime = null } = {}) {
+    let dbCandles = [];
+
+    // 1. Try local PostgreSQL DB (alt_scraper: futures_klines_15m + aggregation)
+    try {
+        let dbUrl = `/api/db/klines?symbol=${symbol}&exchange=binance&interval=${interval}&limit=${limit}`;
         if (endTime) dbUrl += `&endTime=${endTime}`;
 
         const res = await fetch(dbUrl);
         if (res.ok) {
             const data = await res.json();
             if (data && data.candles && data.candles.length > 0) {
-                return data.candles.map(c => ({
+                dbCandles = data.candles.map(c => ({
                     time: typeof c.time === 'string' ? parseInt(c.time, 10) : c.time,
                     open: parseFloat(c.open),
                     high: parseFloat(c.high),
@@ -61,8 +95,47 @@ export async function fetchCandlesBatch({ symbol = APP.symbol, limit = APP.chunk
         console.warn("[DataService] Local DB unavailable, falling back to Binance REST:", err.message);
     }
 
-    // 2. Fallback to Binance REST API
-    return await fetchKlinesBatch(endTime);
+    // 2. If this is the latest load (endTime === null), synchronize with Binance live market to fill any gap
+    if (endTime === null) {
+        const intervalSecMap = { '1m': 60, '5m': 300, '15m': 900, '1h': 3600, '4h': 14400 };
+        const intervalSec = intervalSecMap[interval] || 900;
+        const nowSec = Math.floor(Date.now() / 1000);
+
+        if (dbCandles.length > 0) {
+            const latestDbTime = dbCandles[dbCandles.length - 1].time;
+            // If DB latest candle is older than 1.5 periods, fetch missing gap candles from Binance REST
+            if (nowSec - latestDbTime > intervalSec * 1.5) {
+                addToLog(`Synchronizing recent market gap from Binance Live API (${interval})...`);
+                const gapCandles = await fetchBinanceRestKlines({
+                    symbol,
+                    interval,
+                    limit: 1000,
+                    startTime: (latestDbTime + 1) * 1000
+                });
+
+                if (gapCandles.length > 0) {
+                    const combined = [...dbCandles, ...gapCandles];
+                    combined.sort((a, b) => a.time - b.time);
+                    const deduped = combined.filter((v, i, a) => i === 0 || v.time > a[i - 1].time);
+                    addToLog(`Synchronized ${gapCandles.length} latest live candles from Binance API.`);
+                    return deduped.slice(-limit);
+                }
+            }
+            return dbCandles;
+        }
+
+        // If local DB returned 0 candles (e.g. 1m/5m timeframe or offline), fetch full initial chunk from Binance REST
+        addToLog(`Fetching ${limit} ${interval} candles from Binance REST API...`);
+        return await fetchBinanceRestKlines({ symbol, interval, limit, startTime: null, endTime: null });
+    }
+
+    // 3. If paginating to the past (endTime !== null)
+    if (dbCandles.length > 0) {
+        return dbCandles;
+    }
+
+    // Fallback to Binance REST for older candles
+    return await fetchBinanceRestKlines({ symbol, interval, limit, endTime });
 }
 
 /**
@@ -82,6 +155,7 @@ export async function runFullLoadPipeline() {
 
     const initialCandles = await fetchCandlesBatch({
         symbol: APP.symbol,
+        interval: APP.interval,
         limit: APP.initialCap,
         endTime: null
     });
@@ -93,10 +167,10 @@ export async function runFullLoadPipeline() {
         ...s, 
         candles: cleanCandles, 
         loading: false,
-        dataSourceStatus: cleanCandles.length > 0 ? 'Connected (Local DB/API)' : 'Connecting...'
+        dataSourceStatus: cleanCandles.length > 0 ? 'Connected (Local DB + Live Sync)' : 'Connecting...'
     }));
 
-    addToLog(`Loaded ${cleanCandles.length} candles instantly. Starting live feed & analysis.`);
+    addToLog(`Loaded ${cleanCandles.length} candles for ${APP.interval}. Starting live WebSocket & analysis.`);
     manualRefresh();
 
     startWebSocket({
@@ -129,6 +203,7 @@ export async function loadOlderCandles() {
     try {
         const olderBatch = await fetchCandlesBatch({
             symbol: APP.symbol,
+            interval: APP.interval,
             limit: APP.chunkSize,
             endTime: earliestTime
         });
@@ -143,6 +218,7 @@ export async function loadOlderCandles() {
         
         state.update(s => {
             const combined = [...olderBatch, ...s.candles];
+            combined.sort((a, b) => a.time - b.time);
             const deduped = combined.filter((v, i, a) => i === 0 || v.time > a[i - 1].time);
             return {
                 ...s,
@@ -151,7 +227,7 @@ export async function loadOlderCandles() {
             };
         });
 
-        addToLog(`Loaded +${olderBatch.length} historical candles (Total in view: ${currentCandles.length + olderBatch.length})`);
+        addToLog(`Loaded +${olderBatch.length} historical candles (${APP.interval}) (Total in view: ${currentCandles.length + olderBatch.length})`);
     } catch (e) {
         console.error("Error loading older candles:", e);
         state.update(s => ({ ...s, isLoadingMore: false }));

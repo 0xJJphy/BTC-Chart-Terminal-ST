@@ -137,102 +137,111 @@
             }
         });
 
-        // Track previous candle state for seamless prepend
+        // Track previous candle and timeframe state
         let initialDataLoaded = false;
         let prevCandlesCount = 0;
         let prevEarliestTime = null;
+        let currentActiveInterval = APP.interval;
 
         // Subscribe to state changes
         const unsubscribe = state.subscribe((s) => {
             if (!candleSeries) return;
 
-            if (s.candles.length > 0) {
-                if (!initialDataLoaded) {
-                    candleSeries.setData(s.candles);
-                    volumeSeries.setData(
-                        s.candles.map((c) => ({
-                            time: c.time,
-                            value: c.volume,
-                            color:
-                                c.close >= c.open
-                                    ? "rgba(8, 153, 129, 0.25)"
-                                    : "rgba(242, 54, 69, 0.25)",
-                        })),
-                    );
-                    deltaSeries.setData(
-                        s.candles.map((c) => ({
-                            time: c.time,
-                            value: Math.abs(c.delta || 0),
-                            color:
-                                (c.delta || 0) >= 0
-                                    ? "rgba(34, 197, 94, 0.8)"
-                                    : "rgba(248, 113, 113, 0.8)",
-                        })),
-                    );
-                    initialDataLoaded = true;
-                    prevCandlesCount = s.candles.length;
-                    prevEarliestTime = s.candles[0].time;
-                } else if (prevEarliestTime !== null && s.candles[0].time < prevEarliestTime) {
-                    // Prepend event: historical candles added to the left
-                    const addedCount = s.candles.length - prevCandlesCount;
-                    const timeScale = chart.timeScale();
-                    const logicalRange = timeScale.getVisibleLogicalRange();
+            if (s.candles.length === 0) {
+                initialDataLoaded = false;
+                prevCandlesCount = 0;
+                prevEarliestTime = null;
+                return;
+            }
 
-                    candleSeries.setData(s.candles);
-                    volumeSeries.setData(
-                        s.candles.map((c) => ({
-                            time: c.time,
-                            value: c.volume,
-                            color:
-                                c.close >= c.open
-                                    ? "rgba(8, 153, 129, 0.25)"
-                                    : "rgba(242, 54, 69, 0.25)",
-                        })),
-                    );
-                    deltaSeries.setData(
-                        s.candles.map((c) => ({
-                            time: c.time,
-                            value: Math.abs(c.delta || 0),
-                            color:
-                                (c.delta || 0) >= 0
-                                    ? "rgba(34, 197, 94, 0.8)"
-                                    : "rgba(248, 113, 113, 0.8)",
-                        })),
-                    );
-
-                    // Offset viewport smoothly to prevent visual jumping
-                    if (logicalRange && addedCount > 0) {
-                        timeScale.setVisibleLogicalRange({
-                            from: logicalRange.from + addedCount,
-                            to: logicalRange.to + addedCount,
-                        });
-                    }
-
-                    prevCandlesCount = s.candles.length;
-                    prevEarliestTime = s.candles[0].time;
-                } else {
-                    // Live real-time tick update
-                    const lastCandle = s.candles[s.candles.length - 1];
-                    candleSeries.update(lastCandle);
-                    volumeSeries.update({
-                        time: lastCandle.time,
-                        value: lastCandle.volume,
+            // Check if timeframe switched or first load
+            if (APP.interval !== currentActiveInterval || !initialDataLoaded) {
+                currentActiveInterval = APP.interval;
+                candleSeries.setData(s.candles);
+                volumeSeries.setData(
+                    s.candles.map((c) => ({
+                        time: c.time,
+                        value: c.volume,
                         color:
-                            lastCandle.close >= lastCandle.open
+                            c.close >= c.open
                                 ? "rgba(8, 153, 129, 0.25)"
                                 : "rgba(242, 54, 69, 0.25)",
-                    });
-                    deltaSeries.update({
-                        time: lastCandle.time,
-                        value: Math.abs(lastCandle.delta || 0),
+                    })),
+                );
+                deltaSeries.setData(
+                    s.candles.map((c) => ({
+                        time: c.time,
+                        value: Math.abs(c.delta || 0),
                         color:
-                            (lastCandle.delta || 0) >= 0
+                            (c.delta || 0) >= 0
                                 ? "rgba(34, 197, 94, 0.8)"
                                 : "rgba(248, 113, 113, 0.8)",
+                    })),
+                );
+                initialDataLoaded = true;
+                prevCandlesCount = s.candles.length;
+                prevEarliestTime = s.candles[0].time;
+                chart.timeScale().fitContent();
+            } else if (prevEarliestTime !== null && s.candles[0].time < prevEarliestTime) {
+                // Prepend event: historical candles added to the left
+                const addedCount = s.candles.length - prevCandlesCount;
+                const timeScale = chart.timeScale();
+                const logicalRange = timeScale.getVisibleLogicalRange();
+
+                candleSeries.setData(s.candles);
+                volumeSeries.setData(
+                    s.candles.map((c) => ({
+                        time: c.time,
+                        value: c.volume,
+                        color:
+                            c.close >= c.open
+                                ? "rgba(8, 153, 129, 0.25)"
+                                : "rgba(242, 54, 69, 0.25)",
+                    })),
+                );
+                deltaSeries.setData(
+                    s.candles.map((c) => ({
+                        time: c.time,
+                        value: Math.abs(c.delta || 0),
+                        color:
+                            (c.delta || 0) >= 0
+                                ? "rgba(34, 197, 94, 0.8)"
+                                : "rgba(248, 113, 113, 0.8)",
+                    })),
+                );
+
+                // Offset viewport smoothly to prevent visual jumping
+                if (logicalRange && addedCount > 0) {
+                    timeScale.setVisibleLogicalRange({
+                        from: logicalRange.from + addedCount,
+                        to: logicalRange.to + addedCount,
                     });
-                    prevCandlesCount = s.candles.length;
-                    prevEarliestTime = s.candles[0].time;
                 }
+
+                prevCandlesCount = s.candles.length;
+                prevEarliestTime = s.candles[0].time;
+            } else {
+                // Live real-time tick update
+                const lastCandle = s.candles[s.candles.length - 1];
+                candleSeries.update(lastCandle);
+                volumeSeries.update({
+                    time: lastCandle.time,
+                    value: lastCandle.volume,
+                    color:
+                        lastCandle.close >= lastCandle.open
+                            ? "rgba(8, 153, 129, 0.25)"
+                            : "rgba(242, 54, 69, 0.25)",
+                });
+                deltaSeries.update({
+                    time: lastCandle.time,
+                    value: Math.abs(lastCandle.delta || 0),
+                    color:
+                        (lastCandle.delta || 0) >= 0
+                            ? "rgba(34, 197, 94, 0.8)"
+                            : "rgba(248, 113, 113, 0.8)",
+                });
+                prevCandlesCount = s.candles.length;
+                prevEarliestTime = s.candles[0].time;
             }
 
             // Update primitives based on active mode
