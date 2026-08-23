@@ -160,33 +160,38 @@ export async function runFullLoadPipeline() {
         isLoadingMore: false 
     }));
 
-    addToLog(`Loading initial ${APP.initialCap} candles (${APP.symbol} ${APP.interval})...`);
+    try {
+        addToLog(`Loading initial ${APP.initialCap} candles (${APP.symbol} ${APP.interval})...`);
 
-    const initialCandles = await fetchCandlesBatch({
-        symbol: APP.symbol,
-        interval: APP.interval,
-        limit: APP.initialCap,
-        endTime: null
-    });
+        const initialCandles = await fetchCandlesBatch({
+            symbol: APP.symbol,
+            interval: APP.interval,
+            limit: APP.initialCap,
+            endTime: null
+        });
 
-    initialCandles.sort((a, b) => a.time - b.time);
-    const cleanCandles = initialCandles.filter((v, i, a) => i === 0 || v.time > a[i - 1].time);
+        initialCandles.sort((a, b) => a.time - b.time);
+        const cleanCandles = initialCandles.filter((v, i, a) => i === 0 || v.time > a[i - 1].time);
 
-    state.update(s => ({ 
-        ...s, 
-        candles: cleanCandles, 
-        loading: false,
-        dataSourceStatus: cleanCandles.length > 0 ? 'Connected (Local DB + Live Sync)' : 'Connecting...'
-    }));
+        state.update(s => ({ 
+            ...s, 
+            candles: cleanCandles, 
+            loading: false,
+            dataSourceStatus: cleanCandles.length > 0 ? 'Connected (Local DB + Live Sync)' : 'Connecting...'
+        }));
 
-    addToLog(`Loaded ${cleanCandles.length} candles for ${APP.interval}. Starting live WebSocket & analysis.`);
-    manualRefresh();
+        addToLog(`Loaded ${cleanCandles.length} candles for ${APP.interval}. Starting live WebSocket & analysis.`);
+        manualRefresh();
 
-    startWebSocket({
-        onTick: (_candle) => {
-            state.update(s => s);
-        }
-    });
+        startWebSocket({
+            onTick: (_candle) => {
+                state.update(s => s);
+            }
+        });
+    } catch (e) {
+        console.error("Error in runFullLoadPipeline:", e);
+        state.update(s => ({ ...s, loading: false }));
+    }
 }
 
 /**

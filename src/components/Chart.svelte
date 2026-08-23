@@ -136,15 +136,26 @@
             },
         });
 
-        // TimeScale 1-to-1 sync
+        // TimeScale 1-to-1 sync with recursion guard
+        let isSyncing = false;
         chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
-            if (subChart && range) {
-                subChart.timeScale().setVisibleLogicalRange(range);
+            if (subChart && range && !isSyncing) {
+                isSyncing = true;
+                try {
+                    subChart.timeScale().setVisibleLogicalRange(range);
+                } finally {
+                    isSyncing = false;
+                }
             }
         });
         subChart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
-            if (chart && range) {
-                chart.timeScale().setVisibleLogicalRange(range);
+            if (chart && range && !isSyncing) {
+                isSyncing = true;
+                try {
+                    chart.timeScale().setVisibleLogicalRange(range);
+                } finally {
+                    isSyncing = false;
+                }
             }
         });
 
