@@ -824,8 +824,8 @@ pub fn analyze_crypto_pro(candles: &[Candle], config: &CryptoProConfig) -> Crypt
 
     // Calculate Global Win Rate and Period PnL
     let total_trades_count = trades.len();
-    let winning_trades_count = trades.iter().filter(|t| t.status == "WIN" || t.pnl > 0.0).count();
-    let losing_trades_count = total_trades_count.saturating_sub(winning_trades_count);
+    let winning_trades_count = trades.iter().filter(|t| t.status == "WIN" || t.status == "BE" || t.pnl > 0.0).count();
+    let losing_trades_count = trades.iter().filter(|t| t.status == "LOSS" || t.pnl < 0.0).count();
     let win_rate = if total_trades_count > 0 { (winning_trades_count as f64 / total_trades_count as f64) * 100.0 } else { 0.0 };
 
     let total_pnl = current_capital - config.initial_capital;
@@ -835,7 +835,7 @@ pub fn analyze_crypto_pro(candles: &[Candle], config: &CryptoProConfig) -> Crypt
     let cutoff_time = last_c.time.saturating_sub(period_seconds);
     let recent_trades: Vec<&Trade> = trades.iter().filter(|t| t.time >= cutoff_time).collect();
     let period_trades_count = recent_trades.len();
-    let period_wins = recent_trades.iter().filter(|t| t.status == "WIN").count();
+    let period_wins = recent_trades.iter().filter(|t| t.status == "WIN" || t.status == "BE" || t.pnl > 0.0).count();
     let period_win_rate = if period_trades_count > 0 { (period_wins as f64 / period_trades_count as f64) * 100.0 } else { 0.0 };
     let period_pnl: f64 = recent_trades.iter().map(|t| t.pnl).sum();
     let pnl_per_day = period_pnl / (config.analysis_days.max(1) as f64);

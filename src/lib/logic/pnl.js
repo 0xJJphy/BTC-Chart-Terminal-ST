@@ -21,11 +21,11 @@ export function calculatePnLMetrics(trades, candles, config = {}) {
     let currentEquity = initialBalance, maxPeak = initialBalance, maxDrawdown = 0;
 
     const closedTrades = trades
-        .filter(t => t.status === 'WIN' || t.status === 'LOSS')
+        .filter(t => t.status === 'WIN' || t.status === 'LOSS' || t.status === 'BE' || t.status === 'CLOSED')
         .sort((a, b) => (a.exitTime || 0) - (b.exitTime || 0));
 
     trades.forEach(t => {
-        if (t.status === 'WIN' || t.status === 'LOSS' || t.status === 'OPEN') {
+        if (t.status === 'WIN' || t.status === 'LOSS' || t.status === 'BE' || t.status === 'CLOSED' || t.status === 'OPEN') {
             if (t.entryTime) {
                 if (!firstTradeTime || t.entryTime < firstTradeTime) firstTradeTime = t.entryTime;
                 let tradeEnd = t.exitTime || (candles.length > 0 ? candles[candles.length - 1].time : 0);
@@ -42,7 +42,7 @@ export function calculatePnLMetrics(trades, candles, config = {}) {
     });
 
     closedTrades.forEach(t => {
-        let pnlVal = (t.pnl || 0) * riskPerTrade;
+        let pnlVal = (t.pnl !== undefined && t.pnl !== null ? t.pnl : 0) * riskPerTrade;
 
         if (useFees) {
             const entryPrice = t.entry;
@@ -52,7 +52,7 @@ export function calculatePnLMetrics(trades, candles, config = {}) {
             if (distSL > 0) {
                 const positionSizeUnits = riskPerTrade / distSL;
                 const notionalEntry = positionSizeUnits * entryPrice;
-                const exitPrice = (t.status === 'WIN' && t.tp) ? t.tp : (t.sl || entryPrice);
+                const exitPrice = (t.status === 'WIN' && t.tp) ? t.tp : ((t.status === 'BE' || (t.desc && t.desc.includes('BE'))) ? entryPrice : (t.sl || entryPrice));
                 const notionalExit = positionSizeUnits * exitPrice;
 
                 const feeEntry = notionalEntry * takerFeePct;
@@ -66,7 +66,8 @@ export function calculatePnLMetrics(trades, candles, config = {}) {
         returns.push(pnlVal);
 
         if (pnlVal > 0) { wins++; grossProfit += pnlVal; }
-        else { losses++; grossLoss += Math.abs(pnlVal); }
+        else if (pnlVal < 0) { losses++; grossLoss += Math.abs(pnlVal); }
+        else { wins++; } // 0.0R considered non-loss BE
 
         if (currentEquity > maxPeak) maxPeak = currentEquity;
         const dd = (maxPeak - currentEquity) / maxPeak;
