@@ -53,16 +53,19 @@
     };
 
     function toggleSubPane(key) {
+        let nextPanes;
         if (activeSubPanes.includes(key)) {
-            activeSubPanes = activeSubPanes.filter(k => k !== key);
+            nextPanes = activeSubPanes.filter(k => k !== key);
             const inst = paneInstances.get(key);
             if (inst) {
                 inst.chart.remove();
                 paneInstances.delete(key);
             }
         } else {
-            activeSubPanes = [...activeSubPanes, key];
+            nextPanes = [...activeSubPanes, key];
         }
+        activeSubPanes = nextPanes;
+        state.update(s => ({ ...s, activeSubPanes: nextPanes }));
     }
 
     function clearPriceLines() {
@@ -278,6 +281,10 @@
         const candles = s?.candles || [];
         if (candles.length === 0 || !inst.series) return;
 
+        const isReplay = s.isReplayMode && s.selectedTrade;
+        const t = s.selectedTrade;
+        const tTime = t ? (t.entryTime || t.signalTime || t.time) : null;
+
         if (paneKey === "CVD" && inst.series.cvd) {
             const cvdRes = calculateAnchoredCVD(candles, s.cvdAnchor || 'daily', 20);
             if (cvdRes.cvd.length > 0) {
@@ -285,26 +292,107 @@
                 inst.series.sma.setData(cvdRes.sma);
                 inst.series.upper.setData(cvdRes.upper);
                 inst.series.lower.setData(cvdRes.lower);
+
+                if (isReplay && tTime) {
+                    const volRatio = t.dashboardSnapshot?.volumeRatio ? `${t.dashboardSnapshot.volumeRatio}x` : '';
+                    const volState = t.dashboardSnapshot?.volumeState || 'CONFIRMADO';
+                    inst.series.cvd.setMarkers([
+                        {
+                            time: tTime,
+                            position: 'inBar',
+                            color: '#3b82f6',
+                            shape: 'circle',
+                            text: `● CVD ${volRatio} (${volState}) ✓`
+                        }
+                    ]);
+                } else {
+                    inst.series.cvd.setMarkers([]);
+                }
             }
         } else if (paneKey === "Z_SCORE" && inst.series.hist) {
             const cvdRes = calculateAnchoredCVD(candles, s.cvdAnchor || 'daily', 20);
             if (cvdRes.zScore.length > 0) {
                 inst.series.hist.setData(cvdRes.zScore);
+
+                if (isReplay && tTime) {
+                    const pt = cvdRes.zScore.find(d => d.time === tTime);
+                    const zVal = pt ? pt.value.toFixed(2) : '0.00';
+                    inst.series.hist.setMarkers([
+                        {
+                            time: tTime,
+                            position: 'inBar',
+                            color: '#06b6d4',
+                            shape: 'circle',
+                            text: `● Z-Score: ${zVal}σ ✓`
+                        }
+                    ]);
+                } else {
+                    inst.series.hist.setMarkers([]);
+                }
             }
         } else if (paneKey === "DER" && inst.series.hist) {
             const derData = calculateDER(candles, 14);
             if (derData.length > 0) {
                 inst.series.hist.setData(derData);
+
+                if (isReplay && tTime) {
+                    const pt = derData.find(d => d.time === tTime);
+                    const derVal = pt ? pt.value.toFixed(2) : '1.00';
+                    inst.series.hist.setMarkers([
+                        {
+                            time: tTime,
+                            position: 'inBar',
+                            color: '#6366f1',
+                            shape: 'circle',
+                            text: `● DER: ${derVal} ✓`
+                        }
+                    ]);
+                } else {
+                    inst.series.hist.setMarkers([]);
+                }
             }
         } else if (paneKey === "FRAGILITY" && inst.series.hist) {
             const fragData = calculateFragility(candles, 20);
             if (fragData.length > 0) {
                 inst.series.hist.setData(fragData);
+
+                if (isReplay && tTime) {
+                    const pt = fragData.find(d => d.time === tTime);
+                    const fragVal = pt ? pt.value.toFixed(2) : '1.00';
+                    inst.series.hist.setMarkers([
+                        {
+                            time: tTime,
+                            position: 'inBar',
+                            color: '#f43f5e',
+                            shape: 'circle',
+                            text: `● Fragilidad: ${fragVal}Ψ ✓`
+                        }
+                    ]);
+                } else {
+                    inst.series.hist.setMarkers([]);
+                }
             }
         } else if (paneKey === "RSI" && inst.series.rsi) {
             const rsiData = calculateRSI(candles, 14);
             if (rsiData.length > 0) {
                 inst.series.rsi.setData(rsiData);
+
+                if (isReplay && tTime) {
+                    const pt = rsiData.find(d => d.time === tTime);
+                    const rsiVal = t.dashboardSnapshot?.rsiValue ?? (pt ? pt.value.toFixed(1) : '');
+                    const rsiState = t.dashboardSnapshot?.rsiState || (rsiVal >= 70 ? 'OB' : rsiVal <= 30 ? 'OS' : 'MOM');
+                    inst.series.rsi.setMarkers([
+                        {
+                            time: tTime,
+                            position: 'inBar',
+                            color: '#a855f7',
+                            shape: 'circle',
+                            text: `● RSI: ${rsiVal} (${rsiState}) ✓`
+                        }
+                    ]);
+                } else {
+                    inst.series.rsi.setMarkers([]);
+                }
             }
         } else if (paneKey === "MACD" && inst.series.macd) {
             const macdRes = calculateMACD(candles, 12, 26, 9);
@@ -312,6 +400,22 @@
                 inst.series.macd.setData(macdRes.macd);
                 inst.series.signal.setData(macdRes.signal);
                 inst.series.hist.setData(macdRes.hist);
+
+                if (isReplay && tTime) {
+                    const pt = macdRes.hist.find(d => d.time === tTime);
+                    const macdState = t.dashboardSnapshot?.macdState || (pt && pt.value >= 0 ? 'ALCISTA' : 'BAJISTA');
+                    inst.series.macd.setMarkers([
+                        {
+                            time: tTime,
+                            position: 'inBar',
+                            color: '#38bdf8',
+                            shape: 'circle',
+                            text: `● MACD: ${macdState} ✓`
+                        }
+                    ]);
+                } else {
+                    inst.series.macd.setMarkers([]);
+                }
             }
         } else if (paneKey === "ADX" && inst.series.adx) {
             const dmiRes = calculateDMI_ADX(candles, 14);
@@ -319,6 +423,23 @@
                 inst.series.adx.setData(dmiRes.adx);
                 inst.series.diPlus.setData(dmiRes.diPlus);
                 inst.series.diMinus.setData(dmiRes.diMinus);
+
+                if (isReplay && tTime) {
+                    const pt = dmiRes.adx.find(d => d.time === tTime);
+                    const adxVal = t.dashboardSnapshot?.adxValue ?? (pt ? pt.value.toFixed(1) : '');
+                    const adxRegime = t.dashboardSnapshot?.adxRegime || (adxVal >= 25 ? 'FUERTE' : 'RANGO');
+                    inst.series.adx.setMarkers([
+                        {
+                            time: tTime,
+                            position: 'inBar',
+                            color: '#eab308',
+                            shape: 'circle',
+                            text: `● ADX: ${adxVal} (${adxRegime}) ✓`
+                        }
+                    ]);
+                } else {
+                    inst.series.adx.setMarkers([]);
+                }
             }
         }
     }
@@ -419,6 +540,10 @@
 
         // Subscribe to state changes
         const unsubscribe = state.subscribe((s) => {
+            if (s.activeSubPanes && Array.isArray(s.activeSubPanes) && JSON.stringify(s.activeSubPanes) !== JSON.stringify(activeSubPanes)) {
+                activeSubPanes = [...s.activeSubPanes];
+            }
+
             if (!candleSeries) return;
 
             if (s.candles.length === 0) {
@@ -623,13 +748,38 @@
 
                     <div class="h-4 w-[1px] bg-border/60"></div>
 
-                    <!-- Indicator Confluence -->
-                    <div class="flex items-center gap-2 text-slate-400">
-                        <span class="bg-blue-900/50 text-blue-300 px-1.5 py-0.5 rounded text-[8.5px] font-bold">
+                    <!-- Multi-Indicator Confluence Audit Matrix -->
+                    <div class="flex items-center gap-1.5 flex-wrap">
+                        <span class="bg-blue-900/50 text-blue-300 border border-blue-500/30 px-1.5 py-0.5 rounded text-[8px] font-bold">
                             Score: {t.setupScore?.toFixed(0) || t.score || 70}
                         </span>
+                        {#if t.dashboardSnapshot?.rsiValue}
+                            <span class="bg-purple-950/80 text-purple-200 border border-purple-500/40 px-1.5 py-0.5 rounded text-[8px] font-bold flex items-center gap-1">
+                                <span class="w-1.5 h-1.5 rounded-full bg-purple-400"></span> RSI: {t.dashboardSnapshot.rsiValue}
+                            </span>
+                        {/if}
+                        {#if t.dashboardSnapshot?.macdState}
+                            <span class="bg-sky-950/80 text-sky-200 border border-sky-500/40 px-1.5 py-0.5 rounded text-[8px] font-bold flex items-center gap-1">
+                                <span class="w-1.5 h-1.5 rounded-full bg-sky-400"></span> MACD: {t.dashboardSnapshot.macdState}
+                            </span>
+                        {/if}
+                        {#if t.dashboardSnapshot?.adxValue}
+                            <span class="bg-amber-950/80 text-amber-200 border border-amber-500/40 px-1.5 py-0.5 rounded text-[8px] font-bold flex items-center gap-1">
+                                <span class="w-1.5 h-1.5 rounded-full bg-amber-400"></span> ADX: {t.dashboardSnapshot.adxValue}
+                            </span>
+                        {/if}
+                        {#if t.dashboardSnapshot?.volumeRatio}
+                            <span class="bg-blue-950/80 text-blue-200 border border-blue-500/40 px-1.5 py-0.5 rounded text-[8px] font-bold flex items-center gap-1">
+                                <span class="w-1.5 h-1.5 rounded-full bg-blue-400"></span> Vol: {t.dashboardSnapshot.volumeRatio}x
+                            </span>
+                        {/if}
+                        {#if t.srLevel}
+                            <span class="bg-cyan-950/80 text-cyan-200 border border-cyan-500/40 px-1.5 py-0.5 rounded text-[8px] font-bold flex items-center gap-1">
+                                <span class="w-1.5 h-1.5 rounded-full bg-cyan-400"></span> S/R: ${t.srLevel.toFixed(1)}
+                            </span>
+                        {/if}
                         {#if t.desc}
-                            <span class="text-slate-300 font-sans text-[9px] max-w-[180px] truncate" title={t.desc}>
+                            <span class="text-slate-400 font-sans text-[8.5px] max-w-[140px] truncate" title={t.desc}>
                                 {t.desc}
                             </span>
                         {/if}

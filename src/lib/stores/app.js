@@ -29,6 +29,7 @@ export const state = writable({
     activeZoneTab: 'active',
     activeTradeTab: 'ideas',
     isReplayMode: false,
+    activeSubPanes: ['CVD'],
     activeStrategy: 'SMC', // Default strategy
     selectedTrade: null,
     livePrice: '---',

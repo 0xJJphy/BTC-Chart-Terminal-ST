@@ -609,7 +609,8 @@ export async function replayTrade(trade) {
                 liveCandlesBackup: s.liveCandlesBackup || s.candles,
                 candles: replaySlice,
                 isReplayMode: true,
-                selectedTrade: trade
+                selectedTrade: trade,
+                activeSubPanes: ['CVD', 'RSI', 'MACD', 'ADX']
             }));
 
             setTimeout(() => {
@@ -630,7 +631,8 @@ export async function replayTrade(trade) {
         return {
             ...s,
             isReplayMode: true,
-            selectedTrade: trade
+            selectedTrade: trade,
+            activeSubPanes: ['CVD', 'RSI', 'MACD', 'ADX']
         };
     });
 }
