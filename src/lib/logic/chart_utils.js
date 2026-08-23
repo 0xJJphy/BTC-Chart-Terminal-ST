@@ -301,9 +301,18 @@ export class TradeExecutionRenderer {
             const w = endX - startX;
 
             if (w > 0 && yEntry !== null) {
-                const effYEnt = yEntry * pixelRatio;
-                const effYSL = ySL !== null ? ySL * pixelRatio : effYEnt;
-                const effYTP = yTP1 !== null ? yTP1 * pixelRatio : effYEnt;
+                const initialSL = (t.initial_sl !== undefined && t.initial_sl !== null)
+                    ? Number(t.initial_sl)
+                    : ((t.initialSl !== undefined && t.initialSl !== null)
+                        ? Number(t.initialSl)
+                        : slVal);
+                const yInitSL = initialSL !== null ? series.priceToCoordinate(initialSL) : ySL;
+                const effYInitSL = yInitSL !== null ? yInitSL * pixelRatio : effYSL;
+
+                const tp1Time = toSec(t.tp1_time || t.tp1Time);
+                const rawXTP1 = getCoord(tp1Time);
+                const effXTP1 = rawXTP1 !== null ? rawXTP1 * pixelRatio : null;
+                const hasTrailingBE = effXTP1 !== null && effXTP1 > startX && effXTP1 < endX;
 
                 // Green Profit Area
                 if (yTP1 !== null) {
@@ -313,12 +322,13 @@ export class TradeExecutionRenderer {
                     ctx.fillRect(startX, topP, w, botP - topP);
                 }
 
-                // Red Risk Area
-                if (ySL !== null) {
+                // Red Risk Area (Initial Risk)
+                if (yInitSL !== null) {
                     ctx.fillStyle = 'rgba(242, 54, 69, 0.16)';
-                    const topR = Math.min(effYEnt, effYSL);
-                    const botR = Math.max(effYEnt, effYSL);
-                    ctx.fillRect(startX, topR, w, botR - topR);
+                    const topR = Math.min(effYEnt, effYInitSL);
+                    const botR = Math.max(effYEnt, effYInitSL);
+                    const riskW = hasTrailingBE ? (effXTP1 - startX) : w;
+                    ctx.fillRect(startX, topR, riskW, botR - topR);
                 }
 
                 // Solid bounded Entry Line (Blue)
@@ -329,17 +339,38 @@ export class TradeExecutionRenderer {
                 ctx.lineTo(endX, effYEnt);
                 ctx.stroke();
 
-                // Solid bounded SL Line (Red)
-                if (ySL !== null) {
+                // Stop Loss Handling (Initial SL + Trailing BE)
+                if (hasTrailingBE) {
+                    // 1. Initial SL segment before TP1
                     ctx.strokeStyle = '#f23645';
                     ctx.lineWidth = 2.4 * pixelRatio;
                     ctx.beginPath();
-                    ctx.moveTo(startX, effYSL);
-                    ctx.lineTo(endX, effYSL);
+                    ctx.moveTo(startX, effYInitSL);
+                    ctx.lineTo(effXTP1, effYInitSL);
+                    ctx.stroke();
+
+                    // 2. Trailing step transition to Break-Even at TP1
+                    ctx.save();
+                    ctx.setLineDash([4 * pixelRatio, 4 * pixelRatio]);
+                    ctx.strokeStyle = '#f59e0b';
+                    ctx.lineWidth = 1.8 * pixelRatio;
+                    ctx.beginPath();
+                    ctx.moveTo(effXTP1, effYInitSL);
+                    ctx.lineTo(effXTP1, effYEnt);
+                    ctx.lineTo(endX, effYEnt);
+                    ctx.stroke();
+                    ctx.restore();
+                } else if (yInitSL !== null) {
+                    // Standard SL line
+                    ctx.strokeStyle = '#f23645';
+                    ctx.lineWidth = 2.4 * pixelRatio;
+                    ctx.beginPath();
+                    ctx.moveTo(startX, effYInitSL);
+                    ctx.lineTo(endX, effYInitSL);
                     ctx.stroke();
                 }
 
-                // Solid bounded TP1 Line (Green)
+                // Solid bounded TP1 Line (50% Close - Green)
                 if (yTP1 !== null) {
                     ctx.strokeStyle = '#089981';
                     ctx.lineWidth = 2.4 * pixelRatio;
@@ -349,7 +380,7 @@ export class TradeExecutionRenderer {
                     ctx.stroke();
                 }
 
-                // TP2 Line (Teal)
+                // TP2 Line (25% Close - Teal)
                 if (yTP2 !== null) {
                     ctx.strokeStyle = '#10b981';
                     ctx.lineWidth = 1.8 * pixelRatio;
@@ -359,7 +390,7 @@ export class TradeExecutionRenderer {
                     ctx.stroke();
                 }
 
-                // TP3 Line (Emerald)
+                // TP3 Line (25% Close - Emerald)
                 if (yTP3 !== null) {
                     ctx.strokeStyle = '#34d399';
                     ctx.lineWidth = 1.8 * pixelRatio;
@@ -375,22 +406,27 @@ export class TradeExecutionRenderer {
                 ctx.fillStyle = '#60a5fa';
                 ctx.fillText(`ENTRY $${entryVal?.toFixed(1)}`, endX + 5 * pixelRatio, effYEnt + 3 * pixelRatio);
 
-                if (ySL !== null && slVal !== null) {
+                if (initialSL !== null && !isNaN(initialSL)) {
                     ctx.fillStyle = '#f87171';
-                    ctx.fillText(`SL $${slVal.toFixed(1)}`, endX + 5 * pixelRatio, effYSL + 3 * pixelRatio);
+                    ctx.fillText(`INIT SL $${initialSL.toFixed(1)}`, endX + 5 * pixelRatio, effYInitSL + 3 * pixelRatio);
+                }
+
+                if (hasTrailingBE) {
+                    ctx.fillStyle = '#fbbf24';
+                    ctx.fillText(`BE (SL→ENTRY) $${entryVal?.toFixed(1)}`, endX + 5 * pixelRatio, effYEnt - 10 * pixelRatio);
                 }
 
                 if (yTP1 !== null && tp1Val !== null) {
                     ctx.fillStyle = '#34d399';
-                    ctx.fillText(`TP1 $${tp1Val.toFixed(1)}`, endX + 5 * pixelRatio, effYTP + 3 * pixelRatio);
+                    ctx.fillText(`TP1 (50%) $${tp1Val.toFixed(1)}`, endX + 5 * pixelRatio, effYTP + 3 * pixelRatio);
                 }
                 if (yTP2 !== null && tp2Val !== null) {
                     ctx.fillStyle = '#10b981';
-                    ctx.fillText(`TP2 $${tp2Val.toFixed(1)}`, endX + 5 * pixelRatio, yTP2 * pixelRatio + 3 * pixelRatio);
+                    ctx.fillText(`TP2 (25%) $${tp2Val.toFixed(1)}`, endX + 5 * pixelRatio, yTP2 * pixelRatio + 3 * pixelRatio);
                 }
                 if (yTP3 !== null && tp3Val !== null) {
                     ctx.fillStyle = '#059669';
-                    ctx.fillText(`TP3 $${tp3Val.toFixed(1)}`, endX + 5 * pixelRatio, yTP3 * pixelRatio + 3 * pixelRatio);
+                    ctx.fillText(`TP3 (25%) $${tp3Val.toFixed(1)}`, endX + 5 * pixelRatio, yTP3 * pixelRatio + 3 * pixelRatio);
                 }
             }
         });

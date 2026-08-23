@@ -243,6 +243,11 @@ pub fn analyze_crypto_pro(candles: &[Candle], config: &CryptoProConfig) -> Crypt
     let mut active_sr_time: Option<u64> = None;
     let mut active_sr_type: Option<String> = None;
 
+    let mut active_tp1_time: u64 = 0;
+    let mut active_tp2_time: u64 = 0;
+    let mut active_tp3_time: u64 = 0;
+    let mut active_tp3_reached = false;
+
     let mut cooldown_until_bar: usize = 0;
     let mut current_day_id: u64 = 0;
     let mut daily_trade_count: usize = 0;
@@ -273,6 +278,7 @@ pub fn analyze_crypto_pro(candles: &[Candle], config: &CryptoProConfig) -> Crypt
             if active_trade_side == "LONG" {
                 if !active_tp1_reached && c.high >= active_tp1 {
                     active_tp1_reached = true;
+                    active_tp1_time = c.time as u64;
                     tp1_hits += 1;
                     let pnl_chunk = (active_pos_size * 0.50) * ((active_tp1 - active_entry) / active_entry) * config.leverage;
                     pnl_tp1_acc += pnl_chunk;
@@ -281,12 +287,16 @@ pub fn analyze_crypto_pro(candles: &[Candle], config: &CryptoProConfig) -> Crypt
                 }
                 if active_tp1_reached && !active_tp2_reached && c.high >= active_tp2 {
                     active_tp2_reached = true;
+                    active_tp2_time = c.time as u64;
                     tp2_hits += 1;
                     let pnl_chunk = (active_pos_size * 0.25) * ((active_tp2 - active_entry) / active_entry) * config.leverage;
                     pnl_tp2_acc += pnl_chunk;
                     current_capital += pnl_chunk;
+                    active_sl = active_tp1; // Trail to TP1
                 }
                 if active_tp2_reached && c.high >= active_tp3 {
+                    active_tp3_reached = true;
+                    active_tp3_time = c.time as u64;
                     tp3_hits += 1;
                     let pnl_chunk = (active_pos_size * 0.25) * ((active_tp3 - active_entry) / active_entry) * config.leverage;
                     pnl_tp3_acc += pnl_chunk;
@@ -311,6 +321,7 @@ pub fn analyze_crypto_pro(candles: &[Candle], config: &CryptoProConfig) -> Crypt
             } else if active_trade_side == "SHORT" {
                 if !active_tp1_reached && c.low <= active_tp1 {
                     active_tp1_reached = true;
+                    active_tp1_time = c.time as u64;
                     tp1_hits += 1;
                     let pnl_chunk = (active_pos_size * 0.50) * ((active_entry - active_tp1) / active_entry) * config.leverage;
                     pnl_tp1_acc += pnl_chunk;
@@ -319,12 +330,16 @@ pub fn analyze_crypto_pro(candles: &[Candle], config: &CryptoProConfig) -> Crypt
                 }
                 if active_tp1_reached && !active_tp2_reached && c.low <= active_tp2 {
                     active_tp2_reached = true;
+                    active_tp2_time = c.time as u64;
                     tp2_hits += 1;
                     let pnl_chunk = (active_pos_size * 0.25) * ((active_entry - active_tp2) / active_entry) * config.leverage;
                     pnl_tp2_acc += pnl_chunk;
                     current_capital += pnl_chunk;
+                    active_sl = active_tp1; // Trail to TP1
                 }
                 if active_tp2_reached && c.low <= active_tp3 {
+                    active_tp3_reached = true;
+                    active_tp3_time = c.time as u64;
                     tp3_hits += 1;
                     let pnl_chunk = (active_pos_size * 0.25) * ((active_entry - active_tp3) / active_entry) * config.leverage;
                     pnl_tp3_acc += pnl_chunk;
@@ -379,6 +394,12 @@ pub fn analyze_crypto_pro(candles: &[Candle], config: &CryptoProConfig) -> Crypt
                     sr_level: active_sr_level,
                     sr_time: active_sr_time,
                     sr_type: active_sr_type.clone(),
+                    initial_sl: Some(active_initial_sl),
+                    trailing_sl: if active_tp1_reached { Some(active_sl) } else { None },
+                    tp1_time: if active_tp1_reached { Some(active_tp1_time) } else { None },
+                    tp2_time: if active_tp2_reached { Some(active_tp2_time) } else { None },
+                    tp3_time: if active_tp3_reached { Some(active_tp3_time) } else { None },
+                    exit_reason: Some(exit_reason.to_string()),
                 });
                 trade_id_counter += 1;
                 in_active_trade = false;

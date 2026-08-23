@@ -239,6 +239,12 @@ pub fn create_trade(idx: usize, trade_type: &str, entry: f64, sl: f64, candles: 
         sr_level: None,
         sr_time: None,
         sr_type: None,
+        initial_sl: Some(sl),
+        trailing_sl: None,
+        tp1_time: None,
+        tp2_time: None,
+        tp3_time: None,
+        exit_reason: None,
     };
 
     process_trade_lifecycle(&mut trade, idx, candles, risk_reward);

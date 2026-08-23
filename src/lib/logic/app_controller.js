@@ -596,14 +596,30 @@ export async function replayTrade(trade) {
     const tradeTime = Number(trade.entryTime || trade.entry_time || trade.signalTime || trade.signal_time || trade.time);
 
     // Normalize trade fields so both camelCase and snake_case work everywhere
+    const initialSlVal = trade.initial_sl !== undefined && trade.initial_sl !== null ? Number(trade.initial_sl) : (trade.initialSl !== undefined && trade.initialSl !== null ? Number(trade.initialSl) : Number(trade.sl));
+    const trailingSlVal = trade.trailing_sl !== undefined && trade.trailing_sl !== null ? Number(trade.trailing_sl) : (trade.trailingSl !== undefined && trade.trailingSl !== null ? Number(trade.trailingSl) : null);
+    const tp1TimeVal = trade.tp1_time ? Number(trade.tp1_time) : (trade.tp1Time ? Number(trade.tp1Time) : null);
+    const tp2TimeVal = trade.tp2_time ? Number(trade.tp2_time) : (trade.tp2Time ? Number(trade.tp2Time) : null);
+    const tp3TimeVal = trade.tp3_time ? Number(trade.tp3_time) : (trade.tp3Time ? Number(trade.tp3Time) : null);
+
     const normalizedTrade = {
         ...trade,
         entry: Number(trade.entry),
         sl: Number(trade.sl),
+        initial_sl: initialSlVal,
+        initialSl: initialSlVal,
+        trailing_sl: trailingSlVal,
+        trailingSl: trailingSlVal,
         tp: Number(trade.tp || trade.tp1),
         tp1: (trade.tp1 !== undefined && trade.tp1 !== null) ? Number(trade.tp1) : Number(trade.tp),
         tp2: (trade.tp2 !== undefined && trade.tp2 !== null) ? Number(trade.tp2) : null,
         tp3: (trade.tp3 !== undefined && trade.tp3 !== null) ? Number(trade.tp3) : null,
+        tp1_time: tp1TimeVal,
+        tp1Time: tp1TimeVal,
+        tp2_time: tp2TimeVal,
+        tp2Time: tp2TimeVal,
+        tp3_time: tp3TimeVal,
+        tp3Time: tp3TimeVal,
         time: tradeTime,
         entryTime: Number(trade.entryTime || trade.entry_time || tradeTime),
         signalTime: Number(trade.signalTime || trade.signal_time || tradeTime),
@@ -612,6 +628,13 @@ export async function replayTrade(trade) {
         srTime: trade.srTime || trade.sr_time ? Number(trade.srTime || trade.sr_time) : null,
         srType: trade.srType || trade.sr_type || (trade.type === 'LONG' ? 'SUPPORT' : 'RESISTANCE')
     };
+
+    let targetSubPanes = ['RSI', 'MACD', 'ADX'];
+    if (trade.id?.startsWith('OF-') || normalizedTrade.desc?.toLowerCase().includes('order flow')) {
+        targetSubPanes = ['CVD', 'Z_SCORE'];
+    } else if (trade.id?.startsWith('SMC-')) {
+        targetSubPanes = ['CVD'];
+    }
 
     const fullHistory = await getFullHistoricalCandles();
     if (fullHistory && fullHistory.length > 0) {
@@ -638,7 +661,7 @@ export async function replayTrade(trade) {
             candles: replaySlice,
             isReplayMode: true,
             selectedTrade: normalizedTrade,
-            activeSubPanes: ['CVD', 'RSI', 'MACD', 'ADX']
+            activeSubPanes: targetSubPanes
         }));
         return;
     }
@@ -647,7 +670,7 @@ export async function replayTrade(trade) {
         ...s,
         isReplayMode: true,
         selectedTrade: normalizedTrade,
-        activeSubPanes: ['CVD', 'RSI', 'MACD', 'ADX']
+        activeSubPanes: targetSubPanes
     }));
 }
 

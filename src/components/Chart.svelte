@@ -195,33 +195,23 @@
                 lineWidth: 1.5,
                 title: "SMA 20",
             });
-            inst.series.upper = sc.addLineSeries({
-                color: "rgba(239, 68, 68, 0.6)",
-                lineWidth: 1,
-                lineStyle: 2,
-                title: "+2σ",
-            });
-            inst.series.lower = sc.addLineSeries({
-                color: "rgba(34, 197, 94, 0.6)",
-                lineWidth: 1,
-                lineStyle: 2,
-                title: "-2σ",
-            });
         } else if (paneKey === "Z_SCORE") {
             inst.series.hist = sc.addHistogramSeries({ title: "CVD Z-Score" });
             inst.series.hist.createPriceLine({
                 price: 2.0,
-                color: "rgba(16, 185, 129, 0.5)",
+                color: "rgba(16, 185, 129, 0.8)",
                 lineWidth: 1,
                 lineStyle: 2,
+                lineVisible: false,
                 axisLabelVisible: true,
                 title: "+2σ Exp",
             });
             inst.series.hist.createPriceLine({
                 price: -2.0,
-                color: "rgba(244, 63, 94, 0.5)",
+                color: "rgba(244, 63, 94, 0.8)",
                 lineWidth: 1,
                 lineStyle: 2,
+                lineVisible: false,
                 axisLabelVisible: true,
                 title: "-2σ Comp",
             });
@@ -229,17 +219,19 @@
             inst.series.hist = sc.addHistogramSeries({ title: "DER Norm" });
             inst.series.hist.createPriceLine({
                 price: 1.8,
-                color: "rgba(16, 185, 129, 0.5)",
+                color: "rgba(16, 185, 129, 0.8)",
                 lineWidth: 1,
                 lineStyle: 2,
+                lineVisible: false,
                 axisLabelVisible: true,
                 title: "Alta Eficiencia (1.8)",
             });
             inst.series.hist.createPriceLine({
                 price: 0.6,
-                color: "rgba(244, 63, 94, 0.5)",
+                color: "rgba(244, 63, 94, 0.8)",
                 lineWidth: 1,
                 lineStyle: 2,
+                lineVisible: false,
                 axisLabelVisible: true,
                 title: "Absorción (0.6)",
             });
@@ -247,9 +239,10 @@
             inst.series.hist = sc.addHistogramSeries({ title: "Fragilidad (Ψ)" });
             inst.series.hist.createPriceLine({
                 price: 2.2,
-                color: "rgba(239, 68, 68, 0.6)",
+                color: "rgba(239, 68, 68, 0.8)",
                 lineWidth: 1,
                 lineStyle: 2,
+                lineVisible: false,
                 axisLabelVisible: true,
                 title: "Vacío Liq (2.2)",
             });
@@ -261,26 +254,21 @@
             });
             inst.series.rsi.createPriceLine({
                 price: 70,
-                color: "rgba(244, 63, 94, 0.5)",
+                color: "rgba(244, 63, 94, 0.8)",
                 lineWidth: 1,
                 lineStyle: 2,
+                lineVisible: false,
                 axisLabelVisible: true,
                 title: "OB (70)",
             });
             inst.series.rsi.createPriceLine({
                 price: 30,
-                color: "rgba(16, 185, 129, 0.5)",
+                color: "rgba(16, 185, 129, 0.8)",
                 lineWidth: 1,
                 lineStyle: 2,
+                lineVisible: false,
                 axisLabelVisible: true,
                 title: "OS (30)",
-            });
-            inst.series.rsi.createPriceLine({
-                price: 50,
-                color: "rgba(148, 163, 184, 0.25)",
-                lineWidth: 1,
-                lineStyle: 1,
-                axisLabelVisible: false,
             });
         } else if (paneKey === "MACD") {
             inst.series.macd = sc.addLineSeries({ color: "#38bdf8", lineWidth: 1.5, title: "MACD" });
@@ -292,9 +280,10 @@
             inst.series.diMinus = sc.addLineSeries({ color: "#f43f5e", lineWidth: 1.5, title: "-DI" });
             inst.series.adx.createPriceLine({
                 price: 25,
-                color: "rgba(255, 255, 255, 0.4)",
+                color: "rgba(255, 255, 255, 0.8)",
                 lineWidth: 1,
                 lineStyle: 2,
+                lineVisible: false,
                 axisLabelVisible: true,
                 title: "Trend (25)",
             });
@@ -314,8 +303,6 @@
             if (cvdRes.cvd.length > 0) {
                 inst.series.cvd.setData(cvdRes.cvd);
                 inst.series.sma.setData(cvdRes.sma);
-                inst.series.upper.setData(cvdRes.upper);
-                inst.series.lower.setData(cvdRes.lower);
 
                 if (isReplay && tTime) {
                     const volRatio = t.dashboardSnapshot?.volumeRatio ? `${t.dashboardSnapshot.volumeRatio}x` : '';

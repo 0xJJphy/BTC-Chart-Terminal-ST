@@ -57,4 +57,10 @@ pub struct Trade {
     pub sr_level: Option<f64>,
     pub sr_time: Option<u64>,
     pub sr_type: Option<String>,
+    pub initial_sl: Option<f64>,
+    pub trailing_sl: Option<f64>,
+    pub tp1_time: Option<u64>,
+    pub tp2_time: Option<u64>,
+    pub tp3_time: Option<u64>,
+    pub exit_reason: Option<String>,
 }

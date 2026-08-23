@@ -60,15 +60,54 @@ export function getTradeMarkers(trade) {
         });
     }
 
+    // 2.1 Partial TP1 Hit (50% Closed) Marker
+    const tp1T = trade.tp1Time || trade.tp1_time;
+    if (tp1T && tp1T !== entryT) {
+        markers.push({
+            time: tp1T,
+            position: trade.type === 'LONG' ? 'aboveBar' : 'belowBar',
+            color: '#10b981',
+            shape: 'circle',
+            text: '● TP1 HIT (50% CERRADO → SL A BE)'
+        });
+    }
+
+    // 2.2 Partial TP2 Hit (25% Closed) Marker
+    const tp2T = trade.tp2Time || trade.tp2_time;
+    if (tp2T && tp2T !== entryT) {
+        markers.push({
+            time: tp2T,
+            position: trade.type === 'LONG' ? 'aboveBar' : 'belowBar',
+            color: '#06b6d4',
+            shape: 'circle',
+            text: '● TP2 HIT (25% CERRADO → SL A TP1)'
+        });
+    }
+
+    // 2.3 Partial TP3 Hit (25% Closed) Marker
+    const tp3T = trade.tp3Time || trade.tp3_time;
+    if (tp3T && tp3T !== entryT) {
+        markers.push({
+            time: tp3T,
+            position: trade.type === 'LONG' ? 'aboveBar' : 'belowBar',
+            color: '#34d399',
+            shape: 'circle',
+            text: '● TP3 HIT (25% FINAL)'
+        });
+    }
+
     // 3. Exit Marker
     if (trade.exitTime && (trade.status === 'WIN' || trade.status === 'LOSS')) {
-        markers.push({
-            time: trade.exitTime,
-            position: trade.type === 'LONG' ? 'aboveBar' : 'belowBar',
-            color: trade.status === 'WIN' ? '#089981' : '#f23645',
-            shape: 'circle',
-            text: `${trade.status === 'WIN' ? '3. TP HIT' : '3. SL HIT'} (${trade.pnl >= 0 ? '+' : ''}${trade.pnl?.toFixed(2)}R)`
-        });
+        const exitT = trade.exitTime;
+        if (exitT !== tp1T && exitT !== tp2T && exitT !== tp3T) {
+            markers.push({
+                time: exitT,
+                position: trade.type === 'LONG' ? 'aboveBar' : 'belowBar',
+                color: trade.status === 'WIN' ? '#089981' : '#f23645',
+                shape: 'circle',
+                text: `${trade.status === 'WIN' ? '3. SALIDA BE / TP' : '3. SL HIT'} (${trade.pnl >= 0 ? '+' : ''}${trade.pnl?.toFixed(2)}R)`
+            });
+        }
     }
 
     return markers;
