@@ -88,6 +88,26 @@
     let regPrimitive = new LinearRegressionPrimitive();
     let tradeExecPrimitive = new TradeExecutionPrimitive();
 
+    let isSyncingRange = false;
+    function broadcastLogicalRange(sourceChart, range) {
+        if (!range || isSyncingRange) return;
+        isSyncingRange = true;
+        try {
+            if (chart && chart !== sourceChart) {
+                chart.timeScale().setVisibleLogicalRange(range);
+            }
+            paneInstances.forEach((inst) => {
+                if (inst.chart && inst.chart !== sourceChart) {
+                    inst.chart.timeScale().setVisibleLogicalRange(range);
+                }
+            });
+        } catch (e) {
+            // Ignore during disposal
+        } finally {
+            isSyncingRange = false;
+        }
+    }
+
     function initSubPaneAction(node, paneKey) {
         const subChart = createChart(node, {
             layout: {
@@ -112,34 +132,29 @@
             },
         });
 
-        let isSyncing = false;
-        const unsubs = [];
-
-        if (chart) {
-            const sub1 = chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
-                if (range && !isSyncing) {
-                    isSyncing = true;
-                    try { subChart.timeScale().setVisibleLogicalRange(range); } catch (e) {} finally { isSyncing = false; }
+        // ResizeObserver for subchart
+        const subRo = new ResizeObserver((entries) => {
+            for (const entry of entries) {
+                const { width, height } = entry.contentRect;
+                if (width > 0 && height > 0 && subChart) {
+                    subChart.applyOptions({ width, height });
                 }
-            });
-            unsubs.push(() => chart?.timeScale()?.unsubscribeVisibleLogicalRangeChange(sub1));
+            }
+        });
+        subRo.observe(node);
 
-            const sub2 = subChart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
-                if (range && !isSyncing) {
-                    isSyncing = true;
-                    try { chart.timeScale().setVisibleLogicalRange(range); } catch (e) {} finally { isSyncing = false; }
-                }
-            });
-            unsubs.push(() => subChart?.timeScale()?.unsubscribeVisibleLogicalRangeChange(sub2));
-        }
+        const subListener = (range) => {
+            broadcastLogicalRange(subChart, range);
+        };
+        subChart.timeScale().subscribeVisibleLogicalRangeChange(subListener);
 
-        const inst = { chart: subChart, series: {}, node, unsubs };
+        const inst = { chart: subChart, series: {}, node, ro: subRo, subListener };
         paneInstances.set(paneKey, inst);
 
         renderPaneSeries(paneKey, inst);
         updateSinglePaneData(paneKey, inst, get(state));
 
-        // Sync initial range
+        // Sync initial range immediately
         if (chart) {
             const mainRange = chart.timeScale().getVisibleLogicalRange();
             if (mainRange) {
@@ -149,9 +164,18 @@
 
         return {
             destroy() {
-                unsubs.forEach(u => typeof u === 'function' && u());
-                subChart.remove();
+                subRo.disconnect();
+                try { subChart.timeScale().unsubscribeVisibleLogicalRangeChange(subListener); } catch (e) {}
+                try { subChart.remove(); } catch (e) {}
                 paneInstances.delete(paneKey);
+                if (chartContainer && chart) {
+                    setTimeout(() => {
+                        chart.applyOptions({
+                            width: chartContainer.clientWidth,
+                            height: chartContainer.clientHeight
+                        });
+                    }, 30);
+                }
             }
         };
     }
@@ -500,6 +524,16 @@
         candleSeries.attachPrimitive(regPrimitive);
         candleSeries.attachPrimitive(tradeExecPrimitive);
 
+        const mainRo = new ResizeObserver((entries) => {
+            for (const entry of entries) {
+                const { width, height } = entry.contentRect;
+                if (width > 0 && height > 0 && chart) {
+                    chart.applyOptions({ width, height });
+                }
+            }
+        });
+        if (chartContainer) mainRo.observe(chartContainer);
+
         const handleResize = () => {
             if (chartContainer && chart) {
                 chart.applyOptions({
@@ -518,10 +552,11 @@
         };
         window.addEventListener("resize", handleResize);
 
-        // Infinite scroll / pagination subscription
+        // Infinite scroll / pagination subscription & broadcast
         let rangeDebounce = null;
         chart.timeScale().subscribeVisibleLogicalRangeChange((logicalRange) => {
             if (!logicalRange) return;
+            broadcastLogicalRange(chart, logicalRange);
             if (logicalRange.from < 50) {
                 if (rangeDebounce) clearTimeout(rangeDebounce);
                 rangeDebounce = setTimeout(() => {
@@ -684,10 +719,12 @@
         );
 
         return () => {
+            mainRo.disconnect();
             window.removeEventListener("resize", handleResize);
             unsubscribe();
             unsubscribePriceLines();
             paneInstances.forEach((inst) => {
+                if (inst.ro) inst.ro.disconnect();
                 try { inst.chart.remove(); } catch (e) {}
             });
             paneInstances.clear();
@@ -817,23 +854,23 @@
 
     <!-- Synchronized Multi-Indicator Panes Area -->
     {#if activeSubPanes.length > 0}
-        <div class="flex flex-col border-t border-border/60 bg-[#080b0e] overflow-y-auto max-h-[48vh] divide-y divide-border/30">
+        <div class="flex flex-col border-t border-border/60 bg-[#080b0e] overflow-y-auto max-h-[46vh] custom-scroll divide-y divide-border/30 shrink-0">
             {#each activeSubPanes as paneKey (paneKey)}
                 {@const def = SUB_PANE_DEFS[paneKey]}
-                <div class="h-36 w-full relative flex flex-col shrink-0">
-                    <div class="absolute top-1.5 left-3 right-3 text-[9px] font-mono text-slate-400 flex justify-between items-center z-10 pointer-events-none">
+                <div class="w-full relative flex flex-col shrink-0 {activeSubPanes.length === 1 ? 'h-40' : activeSubPanes.length === 2 ? 'h-32' : 'h-28'}">
+                    <div class="absolute top-1 left-3 right-3 text-[9px] font-mono text-slate-400 flex justify-between items-center z-10 pointer-events-none">
                         <span class="font-bold text-white uppercase tracking-wider flex items-center gap-2">
                             {def ? def.label : paneKey}
                         </span>
                         <button
                             on:click={() => toggleSubPane(paneKey)}
                             class="text-slate-500 hover:text-rose-400 p-1 transition-colors pointer-events-auto cursor-pointer"
-                            title="Close pane"
+                            title="Close indicator pane"
                         >
                             <i class="fas fa-times text-xs"></i>
                         </button>
                     </div>
-                    <div use:initSubPaneAction={paneKey} class="flex-1 w-full"></div>
+                    <div use:initSubPaneAction={paneKey} class="flex-1 w-full min-h-0"></div>
                 </div>
             {/each}
         </div>

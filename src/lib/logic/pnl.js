@@ -80,6 +80,29 @@ export function calculatePnLMetrics(trades, candles, config = {}) {
         }
     });
 
+    const totalTrades = wins + losses;
+    const winRate = totalTrades > 0 ? (wins / totalTrades) * 100 : 0;
+    const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : (grossProfit > 0 ? 999 : 0);
+
+    let sharpe = 0;
+    let sortino = 0;
+    if (returns.length > 1) {
+        const meanReturn = returns.reduce((a, b) => a + b, 0) / returns.length;
+        const variance = returns.reduce((sum, r) => sum + Math.pow(r - meanReturn, 2), 0) / (returns.length - 1);
+        const stdDev = Math.sqrt(variance);
+        if (stdDev > 0) {
+            sharpe = (meanReturn / stdDev) * Math.sqrt(252);
+        }
+        const downsideReturns = returns.filter(r => r < 0);
+        if (downsideReturns.length > 0) {
+            const downsideVar = downsideReturns.reduce((sum, r) => sum + Math.pow(r, 2), 0) / downsideReturns.length;
+            const downsideStd = Math.sqrt(downsideVar);
+            if (downsideStd > 0) {
+                sortino = (meanReturn / downsideStd) * Math.sqrt(252);
+            }
+        }
+    }
+
     const avgWin = wins > 0 ? grossProfit / wins : 0;
     const avgLoss = losses > 0 ? grossLoss / losses : 0;
     const payoffRatio = avgLoss > 0 ? avgWin / avgLoss : (avgWin > 0 ? 999 : 0);
