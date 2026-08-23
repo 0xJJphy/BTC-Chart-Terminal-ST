@@ -207,9 +207,28 @@ export class TradeExecutionRenderer {
 
             const entryVal = t.entry !== undefined ? Number(t.entry) : null;
             const slVal = t.sl !== undefined ? Number(t.sl) : null;
-            const tp1Val = (t.tp1 !== undefined && t.tp1 !== null) ? Number(t.tp1) : ((t.tp !== undefined && t.tp !== null) ? Number(t.tp) : null);
-            const tp2Val = (t.tp2 !== undefined && t.tp2 !== null) ? Number(t.tp2) : null;
-            const tp3Val = (t.tp3 !== undefined && t.tp3 !== null) ? Number(t.tp3) : null;
+            const initialSL = (t.initial_sl !== undefined && t.initial_sl !== null)
+                ? Number(t.initial_sl)
+                : ((t.initialSl !== undefined && t.initialSl !== null)
+                    ? Number(t.initialSl)
+                    : slVal);
+
+            const isLong = (t.type === 'LONG' || t.trade_type === 'LONG' || t.tradeType === 'LONG');
+            const riskDist = (entryVal !== null && initialSL !== null) ? Math.abs(entryVal - initialSL) : 0;
+
+            const tp1Val = (t.tp1 !== undefined && t.tp1 !== null)
+                ? Number(t.tp1)
+                : ((t.tp !== undefined && t.tp !== null)
+                    ? Number(t.tp)
+                    : (entryVal && riskDist ? (isLong ? entryVal + riskDist * 1.0 : entryVal - riskDist * 1.0) : null));
+
+            const tp2Val = (t.tp2 !== undefined && t.tp2 !== null)
+                ? Number(t.tp2)
+                : (entryVal && riskDist ? (isLong ? entryVal + riskDist * 2.0 : entryVal - riskDist * 2.0) : null);
+
+            const tp3Val = (t.tp3 !== undefined && t.tp3 !== null)
+                ? Number(t.tp3)
+                : (entryVal && riskDist ? (isLong ? entryVal + riskDist * 3.0 : entryVal - riskDist * 3.0) : null);
 
             const yEntry = entryVal !== null ? series.priceToCoordinate(entryVal) : null;
             const ySL = slVal !== null ? series.priceToCoordinate(slVal) : null;
@@ -232,7 +251,7 @@ export class TradeExecutionRenderer {
             // 1. S/R Confluence Line (if present for this setup)
             const srLevel = t.srLevel !== undefined && t.srLevel !== null ? Number(t.srLevel) : (t.sr_level !== undefined && t.sr_level !== null ? Number(t.sr_level) : null);
             const srTime = toSec(t.srTime || t.sr_time);
-            const srType = t.srType || t.sr_type || (t.type === 'LONG' ? 'SUPPORT' : 'RESISTANCE');
+            const srType = t.srType || t.sr_type || (isLong ? 'SUPPORT' : 'RESISTANCE');
             if (srLevel !== null && !isNaN(srLevel)) {
                 const ySR = series.priceToCoordinate(srLevel);
                 if (ySR !== null) {
@@ -303,13 +322,10 @@ export class TradeExecutionRenderer {
             if (w > 0 && yEntry !== null) {
                 const effYEnt = yEntry * pixelRatio;
                 const effYSL = ySL !== null ? ySL * pixelRatio : effYEnt;
-                const effYTP = yTP1 !== null ? yTP1 * pixelRatio : effYEnt;
+                const effYTP1 = yTP1 !== null ? yTP1 * pixelRatio : effYEnt;
+                const effYTP2 = yTP2 !== null ? yTP2 * pixelRatio : null;
+                const effYTP3 = yTP3 !== null ? yTP3 * pixelRatio : null;
 
-                const initialSL = (t.initial_sl !== undefined && t.initial_sl !== null)
-                    ? Number(t.initial_sl)
-                    : ((t.initialSl !== undefined && t.initialSl !== null)
-                        ? Number(t.initialSl)
-                        : slVal);
                 const yInitSL = initialSL !== null ? series.priceToCoordinate(initialSL) : ySL;
                 const effYInitSL = yInitSL !== null ? yInitSL * pixelRatio : effYSL;
 
@@ -321,8 +337,8 @@ export class TradeExecutionRenderer {
                 // Green Profit Area
                 if (yTP1 !== null) {
                     ctx.fillStyle = 'rgba(8, 153, 129, 0.16)';
-                    const topP = Math.min(effYEnt, effYTP);
-                    const botP = Math.max(effYEnt, effYTP);
+                    const topP = Math.min(effYEnt, effYTP1);
+                    const botP = Math.max(effYEnt, effYTP1);
                     ctx.fillRect(startX, topP, w, botP - topP);
                 }
 
@@ -375,32 +391,32 @@ export class TradeExecutionRenderer {
                 }
 
                 // Solid bounded TP1 Line (50% Close - Green)
-                if (yTP1 !== null) {
+                if (effYTP1 !== null) {
                     ctx.strokeStyle = '#089981';
                     ctx.lineWidth = 2.4 * pixelRatio;
                     ctx.beginPath();
-                    ctx.moveTo(startX, effYTP);
-                    ctx.lineTo(endX, effYTP);
+                    ctx.moveTo(startX, effYTP1);
+                    ctx.lineTo(endX, effYTP1);
                     ctx.stroke();
                 }
 
-                // TP2 Line (25% Close - Teal)
-                if (yTP2 !== null) {
-                    ctx.strokeStyle = '#10b981';
-                    ctx.lineWidth = 1.8 * pixelRatio;
+                // TP2 Line (25% Close - Cyan)
+                if (effYTP2 !== null) {
+                    ctx.strokeStyle = '#06b6d4';
+                    ctx.lineWidth = 2.0 * pixelRatio;
                     ctx.beginPath();
-                    ctx.moveTo(startX, yTP2 * pixelRatio);
-                    ctx.lineTo(endX, yTP2 * pixelRatio);
+                    ctx.moveTo(startX, effYTP2);
+                    ctx.lineTo(endX, effYTP2);
                     ctx.stroke();
                 }
 
                 // TP3 Line (25% Close - Emerald)
-                if (yTP3 !== null) {
-                    ctx.strokeStyle = '#34d399';
-                    ctx.lineWidth = 1.8 * pixelRatio;
+                if (effYTP3 !== null) {
+                    ctx.strokeStyle = '#10b981';
+                    ctx.lineWidth = 2.0 * pixelRatio;
                     ctx.beginPath();
-                    ctx.moveTo(startX, yTP3 * pixelRatio);
-                    ctx.lineTo(endX, yTP3 * pixelRatio);
+                    ctx.moveTo(startX, effYTP3);
+                    ctx.lineTo(endX, effYTP3);
                     ctx.stroke();
                 }
 
@@ -422,15 +438,15 @@ export class TradeExecutionRenderer {
 
                 if (yTP1 !== null && tp1Val !== null) {
                     ctx.fillStyle = '#34d399';
-                    ctx.fillText(`TP1 (50%) $${tp1Val.toFixed(1)}`, endX + 5 * pixelRatio, effYTP + 3 * pixelRatio);
+                    ctx.fillText(`TP1 (50%) $${tp1Val.toFixed(1)}`, endX + 5 * pixelRatio, effYTP1 + 3 * pixelRatio);
                 }
-                if (yTP2 !== null && tp2Val !== null) {
+                if (effYTP2 !== null && tp2Val !== null) {
+                    ctx.fillStyle = '#06b6d4';
+                    ctx.fillText(`TP2 (25%) $${tp2Val.toFixed(1)}`, endX + 5 * pixelRatio, effYTP2 + 3 * pixelRatio);
+                }
+                if (effYTP3 !== null && tp3Val !== null) {
                     ctx.fillStyle = '#10b981';
-                    ctx.fillText(`TP2 (25%) $${tp2Val.toFixed(1)}`, endX + 5 * pixelRatio, yTP2 * pixelRatio + 3 * pixelRatio);
-                }
-                if (yTP3 !== null && tp3Val !== null) {
-                    ctx.fillStyle = '#059669';
-                    ctx.fillText(`TP3 (25%) $${tp3Val.toFixed(1)}`, endX + 5 * pixelRatio, yTP3 * pixelRatio + 3 * pixelRatio);
+                    ctx.fillText(`TP3 (25%) $${tp3Val.toFixed(1)}`, endX + 5 * pixelRatio, effYTP3 + 3 * pixelRatio);
                 }
             }
         });

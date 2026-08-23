@@ -651,14 +651,10 @@ export async function replayTrade(trade) {
             }
         }
 
-        const startIdx = Math.max(0, idx - 100);
-        const endIdx = Math.min(fullHistory.length, idx + 80);
-        const replaySlice = fullHistory.slice(startIdx, endIdx);
-
         state.update(s => ({
             ...s,
             liveCandlesBackup: s.liveCandlesBackup || s.candles,
-            candles: replaySlice,
+            candles: fullHistory,
             isReplayMode: true,
             selectedTrade: normalizedTrade,
             activeSubPanes: targetSubPanes

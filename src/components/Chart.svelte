@@ -117,8 +117,8 @@
                 fontFamily: "JetBrains Mono",
             },
             grid: {
-                vertLines: { color: "#131722" },
-                horzLines: { color: "#131722" },
+                vertLines: { visible: false },
+                horzLines: { visible: false },
             },
             crosshair: { mode: CrosshairMode.Normal },
             timeScale: {
@@ -190,32 +190,84 @@
                 lineColor: "#3b82f6",
                 lineWidth: 2,
                 title: "CVD",
+                priceLineVisible: false,
+                lastValueVisible: true,
             });
             inst.series.sma = sc.addLineSeries({
                 color: "#f59e0b",
                 lineWidth: 1.5,
                 title: "SMA 20",
+                priceLineVisible: false,
+                lastValueVisible: true,
             });
         } else if (paneKey === "Z_SCORE") {
-            inst.series.hist = sc.addHistogramSeries({ title: "CVD Z-Score" });
+            inst.series.hist = sc.addHistogramSeries({ 
+                title: "CVD Z-Score",
+                priceLineVisible: false,
+                lastValueVisible: true,
+            });
         } else if (paneKey === "DER") {
-            inst.series.hist = sc.addHistogramSeries({ title: "DER Norm" });
+            inst.series.hist = sc.addHistogramSeries({ 
+                title: "DER Norm",
+                priceLineVisible: false,
+                lastValueVisible: true,
+            });
         } else if (paneKey === "FRAGILITY") {
-            inst.series.hist = sc.addHistogramSeries({ title: "Fragilidad (Ψ)" });
+            inst.series.hist = sc.addHistogramSeries({ 
+                title: "Fragilidad (Ψ)",
+                priceLineVisible: false,
+                lastValueVisible: true,
+            });
         } else if (paneKey === "RSI") {
             inst.series.rsi = sc.addLineSeries({
                 color: "#a855f7",
                 lineWidth: 2,
                 title: "RSI 14",
+                priceLineVisible: false,
+                lastValueVisible: true,
             });
         } else if (paneKey === "MACD") {
-            inst.series.macd = sc.addLineSeries({ color: "#38bdf8", lineWidth: 1.5, title: "MACD" });
-            inst.series.signal = sc.addLineSeries({ color: "#fb923c", lineWidth: 1.5, title: "Signal" });
-            inst.series.hist = sc.addHistogramSeries({ title: "Hist" });
+            inst.series.macd = sc.addLineSeries({ 
+                color: "#38bdf8", 
+                lineWidth: 1.5, 
+                title: "MACD",
+                priceLineVisible: false,
+                lastValueVisible: true,
+            });
+            inst.series.signal = sc.addLineSeries({ 
+                color: "#fb923c", 
+                lineWidth: 1.5, 
+                title: "Signal",
+                priceLineVisible: false,
+                lastValueVisible: true,
+            });
+            inst.series.hist = sc.addHistogramSeries({ 
+                title: "Hist",
+                priceLineVisible: false,
+                lastValueVisible: true,
+            });
         } else if (paneKey === "ADX") {
-            inst.series.adx = sc.addLineSeries({ color: "#eab308", lineWidth: 2, title: "ADX" });
-            inst.series.diPlus = sc.addLineSeries({ color: "#10b981", lineWidth: 1.5, title: "+DI" });
-            inst.series.diMinus = sc.addLineSeries({ color: "#f43f5e", lineWidth: 1.5, title: "-DI" });
+            inst.series.adx = sc.addLineSeries({ 
+                color: "#eab308", 
+                lineWidth: 2, 
+                title: "ADX",
+                priceLineVisible: false,
+                lastValueVisible: true,
+            });
+            inst.series.diPlus = sc.addLineSeries({ 
+                color: "#10b981", 
+                lineWidth: 1.5, 
+                title: "+DI",
+                priceLineVisible: false,
+                lastValueVisible: true,
+            });
+            inst.series.diMinus = sc.addLineSeries({ 
+                color: "#f43f5e", 
+                lineWidth: 1.5, 
+                title: "-DI",
+                priceLineVisible: false,
+                lastValueVisible: true,
+            });
         }
     }
 
@@ -418,16 +470,22 @@
             borderUpColor: "#089981",
             wickDownColor: "#f23645",
             wickUpColor: "#089981",
+            priceLineVisible: false,
+            lastValueVisible: true,
         });
 
         volumeSeries = chart.addHistogramSeries({
             priceFormat: { type: "volume" },
             priceScaleId: "volume",
+            priceLineVisible: false,
+            lastValueVisible: false,
         });
 
         deltaSeries = chart.addHistogramSeries({
             priceFormat: { type: "volume" },
             priceScaleId: "volume",
+            priceLineVisible: false,
+            lastValueVisible: false,
         });
 
         chart.priceScale("volume").applyOptions({
