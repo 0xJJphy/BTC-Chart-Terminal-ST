@@ -1,4 +1,4 @@
-﻿use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use crate::models::Candle;
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq)]
@@ -52,8 +52,16 @@ pub struct CvdAnalysisResult {
     pub divergences: Vec<CvdDivergence>,
     pub current_cvd: f64,
     pub current_z_score: f64,
-    pub cvd_trend: String,   // "ACCUMULATION", "DISTRIBUTION", "NEUTRAL"
-    pub drift_bias: f64,     // Mean delta drift per candle
+    pub cvd_trend: String,
+    pub drift_bias: f64,
+    pub der: f64,                  // Delta Efficiency Ratio
+    pub fragility_index: f64,      // Liquidity Fragility Index (Psi)
+    pub adr: f64,                  // Average Daily/Session Range
+    pub adv: f64,                  // Average Daily/Session Volume
+    pub session_range: f64,
+    pub session_delta: f64,
+    pub market_regime: String,     // "PASSIVE_ABSORPTION", "LIQUIDITY_VACUUM", "EFFICIENT_TREND", "COMPRESSION"
+    pub regime_description: String,
 }
 
 fn should_reset_anchor(curr_time: u64, prev_time: u64, anchor: AnchorPeriod) -> bool {
@@ -64,11 +72,9 @@ fn should_reset_anchor(curr_time: u64, prev_time: u64, anchor: AnchorPeriod) -> 
             (curr_time / 86400) != (prev_time / 86400)
         }
         AnchorPeriod::Weekly => {
-            // 1970-01-01 was Thursday (+345600 to align to Monday 00:00 UTC)
             ((curr_time + 345600) / 604800) != ((prev_time + 345600) / 604800)
         }
         AnchorPeriod::Monthly => {
-            // Approx 30.4375 days per month check or 2629743s
             let curr_month = (curr_time / 2629743) as u64;
             let prev_month = (prev_time / 2629743) as u64;
             curr_month != prev_month
@@ -99,6 +105,14 @@ pub fn analyze_anchored_cvd(
             current_z_score: 0.0,
             cvd_trend: "NEUTRAL".to_string(),
             drift_bias: 0.0,
+            der: 0.0,
+            fragility_index: 1.0,
+            adr: 0.0,
+            adv: 0.0,
+            session_range: 0.0,
+            session_delta: 0.0,
+            market_regime: "COMPRESSION".to_string(),
+            regime_description: "Sin datos suficientes".to_string(),
         };
     }
 
@@ -108,7 +122,7 @@ pub fn analyze_anchored_cvd(
         "monthly" | "m" => AnchorPeriod::Monthly,
         "quarterly" | "q" => AnchorPeriod::Quarterly,
         "yearly" | "y" => AnchorPeriod::Yearly,
-        _ => AnchorPeriod::Daily, // Default to daily anchor for robust institutional sessions
+        _ => AnchorPeriod::Daily,
     };
 
     let period = if sma_period == 0 { 20 } else { sma_period };
@@ -118,13 +132,15 @@ pub fn analyze_anchored_cvd(
     let mut running_cvd = 0.0;
     let mut cvd_values = Vec::with_capacity(candles.len());
     let mut total_delta = 0.0;
-
     let mut prev_time = 0;
 
-    for candle in candles {
+    let mut session_start_idx = 0;
+
+    for (idx, candle) in candles.iter().enumerate() {
         let is_reset = should_reset_anchor(candle.time, prev_time, anchor);
         if is_reset {
             running_cvd = 0.0; // Reset anchor
+            session_start_idx = idx;
         }
 
         let vol = candle.volume.unwrap_or(1.0).max(0.0001);
@@ -141,7 +157,6 @@ pub fn analyze_anchored_cvd(
         total_delta += delta;
         cvd_values.push(running_cvd);
 
-        // Rolling Statistics: Mean and Standard Deviation for Z-Score Bands
         let window_start = if cvd_values.len() >= period { cvd_values.len() - period } else { 0 };
         let window = &cvd_values[window_start..];
         let cvd_sma: f64 = window.iter().sum::<f64>() / window.len() as f64;
@@ -173,7 +188,52 @@ pub fn analyze_anchored_cvd(
 
     let drift_bias = total_delta / candles.len() as f64;
 
-    // Statistically-Filtered Divergence Detection
+    // --- QUANTITATIVE ADR, ADV, DER & FRAGILITY CALCULATIONS ---
+    let session_candles = &candles[session_start_idx..];
+    let session_high = session_candles.iter().map(|c| c.high).fold(f64::MIN, f64::max);
+    let session_low = session_candles.iter().map(|c| c.low).fold(f64::MAX, f64::min);
+    let session_range = (session_high - session_low).max(0.01);
+    let session_delta = running_cvd;
+
+    // Baseline ADR & ADV across lookback
+    let base_lookback = candles.len().min(100);
+    let base_slice = &candles[(candles.len() - base_lookback)..];
+    let adr: f64 = base_slice.iter().map(|c| c.high - c.low).sum::<f64>() / base_lookback as f64;
+    let adv: f64 = base_slice.iter().map(|c| c.volume.unwrap_or(0.0)).sum::<f64>() / base_lookback as f64;
+
+    let norm_range = session_range / adr.max(0.01);
+    let norm_delta = (session_delta.abs() / adv.max(0.01)).max(0.001);
+
+    // Delta Efficiency Ratio (DER): Price shift per unit of normalized delta
+    let der = session_range / (session_delta.abs().max(1.0));
+
+    // Liquidity Fragility Index (Psi): High range with small delta => Thin Book / Vacuum
+    let fragility_index = norm_range / norm_delta;
+
+    // Classification of Microstructure Regimes
+    let (market_regime, regime_description) = if fragility_index > 2.2 && norm_range > 1.1 {
+        (
+            "LIQUIDITY_VACUUM".to_string(),
+            "Vacío de Liquidez (Thin Book): Alto desplazamiento de precio con Delta reducido. Riesgo de reversión violenta / Stop Hunt.".to_string(),
+        )
+    } else if fragility_index < 0.45 && session_delta.abs() > (adv * 0.8) {
+        (
+            "PASSIVE_ABSORPTION".to_string(),
+            "Absorción Pasiva (Iceberg Walls): Delta extremo contenido en rango estrecho. Acumulación/Distribución institucional masiva.".to_string(),
+        )
+    } else if norm_range > 1.2 && norm_delta > 1.0 {
+        (
+            "EFFICIENT_TREND".to_string(),
+            "Tendencia Eficiente: Expansión de rango respaldada por flujo direccional agresivo.".to_string(),
+        )
+    } else {
+        (
+            "COMPRESSION".to_string(),
+            "Compresión / Equilibrio: Rango y delta dentro de parámetros estadísticos normales de subasta.".to_string(),
+        )
+    };
+
+    // Divergence detection
     let mut divergences = Vec::new();
     if candles.len() > lookback + 5 {
         for i in (lookback + 2)..(candles.len() - 1) {
@@ -181,7 +241,6 @@ pub fn analyze_anchored_cvd(
             let curr_cvd = cvd_values[i];
             let curr_z = points[i].z_score;
 
-            // Local Price Low Pivot
             let is_price_low = curr_c.low <= candles[i - 1].low && curr_c.low <= candles[i + 1].low;
             if is_price_low {
                 let window_start = i.saturating_sub(lookback);
@@ -191,8 +250,6 @@ pub fn analyze_anchored_cvd(
                     let is_prev_low = prev_c.low <= candles[j - 1].low && prev_c.low <= candles[j + 1].low;
 
                     if is_prev_low {
-                        // Bullish Divergence: Price Lower Low + CVD Higher Low
-                        // Enhanced Filter: Require CVD Z-Score not excessively overbought
                         if curr_c.low < prev_c.low && curr_cvd > prev_cvd && curr_z < 1.5 {
                             let strength = ((curr_cvd - prev_cvd).abs() / (prev_cvd.abs() + 1.0)).min(1.0);
                             divergences.push(CvdDivergence {
@@ -201,7 +258,7 @@ pub fn analyze_anchored_cvd(
                                 div_type: "BULLISH_ABSORPTION".to_string(),
                                 strength,
                                 z_score: curr_z,
-                                desc: format!("Bullish Absorption (Anchor: {}): Price Lower Low vs aCVD Higher Low (Z: {:.2})", anchor_str, curr_z),
+                                desc: format!("Bullish Absorption ({:?}): Price Lower Low vs aCVD Higher Low (Z: {:.2})", anchor, curr_z),
                             });
                             break;
                         }
@@ -209,7 +266,6 @@ pub fn analyze_anchored_cvd(
                 }
             }
 
-            // Local Price High Pivot
             let is_price_high = curr_c.high >= candles[i - 1].high && curr_c.high >= candles[i + 1].high;
             if is_price_high {
                 let window_start = i.saturating_sub(lookback);
@@ -219,8 +275,6 @@ pub fn analyze_anchored_cvd(
                     let is_prev_high = prev_c.high >= candles[j - 1].high && prev_c.high >= candles[j + 1].high;
 
                     if is_prev_high {
-                        // Bearish Divergence: Price Higher High + CVD Lower High
-                        // Filter: To overcome natural negative delta bias, require statistically verified exhaustion (Z-score > -1.0)
                         if curr_c.high > prev_c.high && curr_cvd < prev_cvd && curr_z > -1.5 {
                             let strength = ((prev_cvd - curr_cvd).abs() / (prev_cvd.abs() + 1.0)).min(1.0);
                             divergences.push(CvdDivergence {
@@ -229,7 +283,7 @@ pub fn analyze_anchored_cvd(
                                 div_type: "BEARISH_ABSORPTION".to_string(),
                                 strength,
                                 z_score: curr_z,
-                                desc: format!("Bearish Absorption (Anchor: {}): Price Higher High vs aCVD Lower High (Z: {:.2})", anchor_str, curr_z),
+                                desc: format!("Bearish Absorption ({:?}): Price Higher High vs aCVD Lower High (Z: {:.2})", anchor, curr_z),
                             });
                             break;
                         }
@@ -263,5 +317,13 @@ pub fn analyze_anchored_cvd(
         current_z_score: last_pt.z_score,
         cvd_trend,
         drift_bias,
+        der,
+        fragility_index,
+        adr,
+        adv,
+        session_range,
+        session_delta,
+        market_regime,
+        regime_description,
     }
 }

@@ -4,6 +4,7 @@
 
     const tabs = [
         { id: "zones", icon: "fas fa-layer-group", title: "SMC Explorer" },
+        { id: "orderflow", icon: "fas fa-water", title: "Order Flow & Liquidity (CVD, DER, Depth)" },
         { id: "trades", icon: "fas fa-exchange-alt", title: "Operations" },
         { id: "lines", icon: "fas fa-chart-line", title: "Trend Analysis" },
         {

@@ -6,6 +6,7 @@
     import RegLinPanel from "./panels/RegLinPanel.svelte";
     import StratPanel from "./panels/StratPanel.svelte";
     import PnLPanel from "./panels/PnLPanel.svelte";
+    import OrderFlowPanel from "./panels/OrderFlowPanel.svelte";
     import LogPanel from "./panels/LogPanel.svelte";
 </script>
 
@@ -15,6 +16,8 @@
 >
     {#if $state.activeMode === "zones"}
         <SMCPanel />
+    {:else if $state.activeMode === "orderflow"}
+        <OrderFlowPanel />
     {:else if $state.activeMode === "trades"}
         <TradesPanel />
     {:else if $state.activeMode === "lines"}
