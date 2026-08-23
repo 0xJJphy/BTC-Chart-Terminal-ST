@@ -6,6 +6,7 @@
         BoxPrimitive,
         TrendLinePrimitive,
         LinearRegressionPrimitive,
+        TradeExecutionPrimitive,
     } from "../lib/logic/chart_utils.js";
     import { getTradeMarkers } from "../lib/logic/replay.js";
     import { calculateRSI, calculateMACD } from "../lib/logic/indicators.js";
@@ -107,6 +108,7 @@
     let boxPrimitive = new BoxPrimitive();
     let trendPrimitive = new TrendLinePrimitive();
     let regPrimitive = new LinearRegressionPrimitive();
+    let tradeExecPrimitive = new TradeExecutionPrimitive();
 
     function initSubChart() {
         if (!subChartContainer || subChart) return;
@@ -317,6 +319,7 @@
         candleSeries.attachPrimitive(boxPrimitive);
         candleSeries.attachPrimitive(trendPrimitive);
         candleSeries.attachPrimitive(regPrimitive);
+        candleSeries.attachPrimitive(tradeExecPrimitive);
 
         const handleResize = () => {
             if (chartContainer && chart) {
@@ -462,10 +465,12 @@
                         trendPrimitive.setData([]);
                     }
                     regPrimitive.setData(null);
+                    tradeExecPrimitive.setData(t);
                 } else {
                     boxPrimitive.setData([]);
                     trendPrimitive.setData([]);
                     regPrimitive.setData(null);
+                    tradeExecPrimitive.setData(null);
                 }
             }
 

@@ -24,35 +24,39 @@ export function zoomRange(chart, from, to) {
 export function getTradeMarkers(trade) {
     const markers = [];
 
-    // Prioritize signalTime or entryTime for the IDEA marker
-    const signalT = trade.signalTime || trade.entryTime;
-    if (signalT) {
+    const signalT = trade.signalTime || trade.time;
+    const entryT = trade.entryTime || trade.time;
+
+    // 1. Setup / Order Placed Marker
+    if (signalT && signalT !== entryT) {
         markers.push({
             time: signalT,
             position: trade.type === 'LONG' ? 'belowBar' : 'aboveBar',
-            color: '#3b82f6',
-            shape: trade.type === 'LONG' ? 'arrowUp' : 'arrowDown',
-            text: 'IDEA'
+            color: '#eab308',
+            shape: 'square',
+            text: '1. SETUP (LIMIT ORDEN)'
         });
     }
 
-    if (trade.entryTime) {
+    // 2. Execution / Fill Marker
+    if (entryT) {
         markers.push({
-            time: trade.entryTime,
+            time: entryT,
             position: trade.type === 'LONG' ? 'belowBar' : 'aboveBar',
-            color: '#2962ff',
+            color: trade.type === 'LONG' ? '#10b981' : '#f43f5e',
             shape: trade.type === 'LONG' ? 'arrowUp' : 'arrowDown',
-            text: 'ENTRY'
+            text: signalT && signalT !== entryT ? '2. FILL (ENTRADA)' : 'ENTRADA'
         });
     }
 
+    // 3. Exit Marker
     if (trade.exitTime && (trade.status === 'WIN' || trade.status === 'LOSS')) {
         markers.push({
             time: trade.exitTime,
             position: trade.type === 'LONG' ? 'aboveBar' : 'belowBar',
             color: trade.status === 'WIN' ? '#089981' : '#f23645',
             shape: 'circle',
-            text: trade.status
+            text: `${trade.status === 'WIN' ? '3. TP HIT' : '3. SL HIT'} (${trade.pnl >= 0 ? '+' : ''}${trade.pnl?.toFixed(2)}R)`
         });
     }
 

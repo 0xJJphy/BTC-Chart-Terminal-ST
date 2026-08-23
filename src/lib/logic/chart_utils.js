@@ -181,3 +181,143 @@ export class LinearRegressionPrimitive {
     timeAxisViews() { return []; }
     autoscaleInfo() { return null; }
 }
+
+export class TradeExecutionRenderer {
+    constructor() { this._data = null; }
+    update(data) { this._data = data; }
+    draw(target) {
+        target.useBitmapCoordinateSpace(scope => {
+            if (!this._data || !this._data.trade) return;
+            const t = this._data.trade;
+            const ctx = scope.context;
+            const timeScale = this._data.timeScale;
+            const series = this._data.series;
+            const pixelRatio = scope.horizontalPixelRatio;
+
+            const tSignal = t.signalTime || t.time || (t.entryTime ? t.entryTime - 900 : null);
+            const tEntry = t.entryTime || t.time;
+            const tExit = t.exitTime || (tEntry ? tEntry + 3600 * 2 : null);
+
+            if (!tEntry) return;
+
+            const xSignal = tSignal ? timeScale.timeToCoordinate(tSignal) : null;
+            const xEntry = timeScale.timeToCoordinate(tEntry);
+            const xExit = tExit ? timeScale.timeToCoordinate(tExit) : scope.mediaSize.width;
+
+            const yEntry = series.priceToCoordinate(t.entry);
+            const ySL = series.priceToCoordinate(t.sl);
+            const yTP1 = series.priceToCoordinate(t.tp1 || t.tp);
+            const yTP2 = t.tp2 ? series.priceToCoordinate(t.tp2) : null;
+            const yTP3 = t.tp3 ? series.priceToCoordinate(t.tp3) : null;
+
+            if (yEntry === null || ySL === null) return;
+
+            // 1. Order Pending / Retest Phase (from signal to entry)
+            if (xSignal !== null && xEntry !== null && xEntry > xSignal) {
+                const effXSig = Math.max(0, xSignal) * pixelRatio;
+                const effXEnt = Math.min(scope.mediaSize.width, xEntry) * pixelRatio;
+                const effYEnt = yEntry * pixelRatio;
+
+                ctx.save();
+                ctx.setLineDash([4 * pixelRatio, 4 * pixelRatio]);
+                ctx.strokeStyle = '#eab308';
+                ctx.lineWidth = 1.5 * pixelRatio;
+                ctx.beginPath();
+                ctx.moveTo(effXSig, effYEnt);
+                ctx.lineTo(effXEnt, effYEnt);
+                ctx.stroke();
+
+                // Fill light yellow area indicating pending order / retest zone
+                ctx.fillStyle = 'rgba(234, 179, 8, 0.08)';
+                const topY = Math.min(yEntry, ySL) * pixelRatio;
+                const botY = Math.max(yEntry, ySL) * pixelRatio;
+                ctx.fillRect(effXSig, topY, effXEnt - effXSig, botY - topY);
+                ctx.restore();
+            }
+
+            // 2. Active Trade Execution Phase (from entry to exit)
+            if (xEntry !== null && xExit !== null) {
+                const startX = Math.max(0, xEntry) * pixelRatio;
+                const endX = Math.min(scope.mediaSize.width, xExit) * pixelRatio;
+                const w = endX - startX;
+
+                if (w > 0) {
+                    const effYEnt = yEntry * pixelRatio;
+                    const effYSL = ySL * pixelRatio;
+                    const effYTP = yTP1 !== null ? yTP1 * pixelRatio : effYEnt;
+
+                    // Green Profit Area
+                    ctx.fillStyle = 'rgba(8, 153, 129, 0.12)';
+                    const topP = Math.min(effYEnt, effYTP);
+                    const botP = Math.max(effYEnt, effYTP);
+                    ctx.fillRect(startX, topP, w, botP - topP);
+
+                    // Red Risk Area
+                    ctx.fillStyle = 'rgba(242, 54, 69, 0.12)';
+                    const topR = Math.min(effYEnt, effYSL);
+                    const botR = Math.max(effYEnt, effYSL);
+                    ctx.fillRect(startX, topR, w, botR - topR);
+
+                    // Solid bounded Entry Line
+                    ctx.strokeStyle = '#2962ff';
+                    ctx.lineWidth = 2 * pixelRatio;
+                    ctx.beginPath();
+                    ctx.moveTo(startX, effYEnt);
+                    ctx.lineTo(endX, effYEnt);
+                    ctx.stroke();
+
+                    // Solid bounded SL Line
+                    ctx.strokeStyle = '#f23645';
+                    ctx.lineWidth = 2 * pixelRatio;
+                    ctx.beginPath();
+                    ctx.moveTo(startX, effYSL);
+                    ctx.lineTo(endX, effYSL);
+                    ctx.stroke();
+
+                    // Solid bounded TP1 Line
+                    if (yTP1 !== null) {
+                        ctx.strokeStyle = '#089981';
+                        ctx.lineWidth = 2 * pixelRatio;
+                        ctx.beginPath();
+                        ctx.moveTo(startX, effYTP);
+                        ctx.lineTo(endX, effYTP);
+                        ctx.stroke();
+                    }
+
+                    // TP2 Line
+                    if (yTP2 !== null) {
+                        ctx.strokeStyle = '#10b981';
+                        ctx.lineWidth = 1.5 * pixelRatio;
+                        ctx.beginPath();
+                        ctx.moveTo(startX, yTP2 * pixelRatio);
+                        ctx.lineTo(endX, yTP2 * pixelRatio);
+                        ctx.stroke();
+                    }
+
+                    // TP3 Line
+                    if (yTP3 !== null) {
+                        ctx.strokeStyle = '#34d399';
+                        ctx.lineWidth = 1.5 * pixelRatio;
+                        ctx.beginPath();
+                        ctx.moveTo(startX, yTP3 * pixelRatio);
+                        ctx.lineTo(endX, yTP3 * pixelRatio);
+                        ctx.stroke();
+                    }
+                }
+            }
+        });
+    }
+}
+
+export class TradeExecutionPrimitive {
+    constructor() { this._renderer = new TradeExecutionRenderer(); this._trade = null; }
+    setData(trade) { this._trade = trade; this._requestUpdate?.(); }
+    attached({ chart, series, requestUpdate }) { this._chart = chart; this._series = series; this._requestUpdate = requestUpdate; }
+    detached() { this._chart = null; this._series = null; }
+    updateAllViews() { this._requestUpdate?.(); }
+    paneViews() { return [{ renderer: () => ({ draw: (target) => { this._renderer.update({ trade: this._trade, timeScale: this._chart.timeScale(), series: this._series }); this._renderer.draw(target); } }) }]; }
+    priceAxisViews() { return []; }
+    timeAxisViews() { return []; }
+    autoscaleInfo() { return null; }
+}
+
