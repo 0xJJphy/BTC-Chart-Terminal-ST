@@ -417,6 +417,8 @@ pub fn analyze_crypto_pro(candles: &[Candle], config: &CryptoProConfig) -> Crypt
         // 6. S/R Confluence
         let supp_pivot = pivots.iter().filter(|p| !p.is_high && (c.low - p.price).abs() <= curr_atr * 1.5).last().cloned();
         let res_pivot = pivots.iter().filter(|p| p.is_high && (c.high - p.price).abs() <= curr_atr * 1.5).last().cloned();
+        let closest_supp = pivots.iter().filter(|p| !p.is_high && p.price <= c.close).last().cloned();
+        let closest_res = pivots.iter().filter(|p| p.is_high && p.price >= c.close).last().cloned();
         let near_support = supp_pivot.is_some();
         let near_resistance = res_pivot.is_some();
         if near_support { score_long += 10.0; }
@@ -446,8 +448,8 @@ pub fn analyze_crypto_pro(candles: &[Candle], config: &CryptoProConfig) -> Crypt
                             active_entry_time = c.time;
                             active_signal_time = c.time;
                             active_score = score_long;
-                            active_sr_level = supp_pivot.as_ref().map(|p| p.price);
-                            active_sr_time = supp_pivot.as_ref().map(|p| p.time as u64);
+                            active_sr_level = supp_pivot.as_ref().or(closest_supp.as_ref()).map(|p| p.price);
+                            active_sr_time = supp_pivot.as_ref().or(closest_supp.as_ref()).map(|p| p.time as u64);
                             active_sr_type = Some("SUPPORT".to_string());
                             active_snapshot = Some(serde_json::json!({
                                 "signal": "LONG",
@@ -518,8 +520,8 @@ pub fn analyze_crypto_pro(candles: &[Candle], config: &CryptoProConfig) -> Crypt
                             active_entry_time = c.time;
                             active_signal_time = c.time;
                             active_score = score_short;
-                            active_sr_level = res_pivot.as_ref().map(|p| p.price);
-                            active_sr_time = res_pivot.as_ref().map(|p| p.time as u64);
+                            active_sr_level = res_pivot.as_ref().or(closest_res.as_ref()).map(|p| p.price);
+                            active_sr_time = res_pivot.as_ref().or(closest_res.as_ref()).map(|p| p.time as u64);
                             active_sr_type = Some("RESISTANCE".to_string());
                             active_snapshot = Some(serde_json::json!({
                                 "signal": "SHORT",
@@ -597,8 +599,8 @@ pub fn analyze_crypto_pro(candles: &[Candle], config: &CryptoProConfig) -> Crypt
                             active_entry_time = c.time;
                             active_signal_time = candles[bar_idx].time;
                             active_score = score;
-                            active_sr_level = supp_pivot.as_ref().map(|p| p.price);
-                            active_sr_time = supp_pivot.as_ref().map(|p| p.time as u64);
+                            active_sr_level = supp_pivot.as_ref().or(closest_supp.as_ref()).map(|p| p.price);
+                            active_sr_time = supp_pivot.as_ref().or(closest_supp.as_ref()).map(|p| p.time as u64);
                             active_sr_type = Some("SUPPORT".to_string());
                             active_snapshot = Some(serde_json::json!({
                                 "signal": "LONG",
@@ -677,8 +679,8 @@ pub fn analyze_crypto_pro(candles: &[Candle], config: &CryptoProConfig) -> Crypt
                             active_entry_time = c.time;
                             active_signal_time = candles[bar_idx].time;
                             active_score = score;
-                            active_sr_level = res_pivot.as_ref().map(|p| p.price);
-                            active_sr_time = res_pivot.as_ref().map(|p| p.time as u64);
+                            active_sr_level = res_pivot.as_ref().or(closest_res.as_ref()).map(|p| p.price);
+                            active_sr_time = res_pivot.as_ref().or(closest_res.as_ref()).map(|p| p.time as u64);
                             active_sr_type = Some("RESISTANCE".to_string());
                             active_snapshot = Some(serde_json::json!({
                                 "signal": "SHORT",
@@ -801,8 +803,8 @@ pub fn analyze_crypto_pro(candles: &[Candle], config: &CryptoProConfig) -> Crypt
 
     // Calculate Global Win Rate and Period PnL
     let total_trades_count = trades.len();
-    let winning_trades_count = trades.iter().filter(|t| t.status == "WIN").count();
-    let losing_trades_count = total_trades_count - winning_trades_count;
+    let winning_trades_count = trades.iter().filter(|t| t.status == "WIN" || t.pnl > 0.0).count();
+    let losing_trades_count = total_trades_count.saturating_sub(winning_trades_count);
     let win_rate = if total_trades_count > 0 { (winning_trades_count as f64 / total_trades_count as f64) * 100.0 } else { 0.0 };
 
     let total_pnl = current_capital - config.initial_capital;

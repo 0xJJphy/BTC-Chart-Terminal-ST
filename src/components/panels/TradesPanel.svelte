@@ -142,7 +142,7 @@
                 </div>
             {/each}
         {:else}
-            {#each history as trade}
+            {#each history.slice().sort((a, b) => (b.time || 0) - (a.time || 0)) as trade}
                 <div
                     on:click={() => replayTrade(trade)}
                     class="bg-panel/50 border border-border/30 p-3 rounded hover:border-slate-500 transition-all cursor-pointer"

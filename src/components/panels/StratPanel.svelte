@@ -22,12 +22,20 @@
 
     $: stats = (() => {
         if ($state.trades.length === 0) return null;
-        const wins = $state.trades.filter((r) => r.status === "WIN").length;
+        const wins = $state.trades.filter((r) => r.status === "WIN" || (r.pnl && r.pnl > 0)).length;
+        const total = $state.trades.length;
+        const m = $state.pnlMetrics || {};
         return {
-            count: $state.trades.length,
-            wr: ((wins / $state.trades.length) * 100).toFixed(1),
-            pnl: ($state.pnlMetrics?.realizedPnL || 0).toFixed(2),
-            pf: ($state.pnlMetrics?.profitFactor || 0).toFixed(2),
+            count: total,
+            wr: ((wins / total) * 100).toFixed(1),
+            pnl: (m.realizedPnL || 0).toFixed(2),
+            pf: (m.profitFactor || 0).toFixed(2),
+            sharpe: (m.sharpe || 0).toFixed(2),
+            sortino: (m.sortino || 0).toFixed(2),
+            mdd: (m.maxDrawdown || 0).toFixed(1),
+            expectancy: (m.expectancy !== undefined ? m.expectancy : 0).toFixed(2),
+            payoff: (m.payoffRatio || 0).toFixed(2),
+            calmar: (m.calmar || 0).toFixed(2)
         };
     })();
 </script>
@@ -78,25 +86,16 @@
             <div class="flex gap-2">
                 <select
                     bind:value={selectedStrat}
-                    class="flex-1 bg-bg border border-border text-[10px] text-white rounded px-2 py-2 outline-none font-bold appearance-none cursor-pointer"
+                    class="bg-panel border border-border text-white text-xs rounded p-2 flex-1 focus:border-accent outline-none font-mono"
                 >
-                    <optgroup label="Quantitative Confluence">
-                        <option value="CRYPTO_PRO">👑 CRYPTO SMART PRO v2 (Confluence + Retest)</option>
+                    <optgroup label="Rule-Based Quantitative Models">
+                        <option value="standard">EMA Trend Follower (50/200)</option>
+                        <option value="scalp">Divergence Momentum Scalp</option>
+                        <option value="reversal">Liquidity Sweep Mean-Reversion</option>
+                        <option value="breakout">Volatility Compression Breakout</option>
                     </optgroup>
-                    <optgroup label="SMC Logic">
-                        <option value="SMC">SMC Reversal (OB/FVG)</option>
-                    </optgroup>
-                    <optgroup label="Core Traps (Fixed R)">
-                        <option value="standard">🏹 LIQUIDITY TRAP (2:1)</option>
-                        <option value="agro">🔥 TRAP AGGRESSIVE (3:1)</option>
-                    </optgroup>
-                    <optgroup label="Enhanced Traps (ATR)">
-                        <option value="atr">🎯 ATR BASED TRAP (2:1)</option>
-                        <option value="atr_agro">⚡ ATR AGGRO (3:1)</option>
-                    </optgroup>
-                    <optgroup label="Professional (Partial)">
-                        <option value="atr_partial_1">💎 PARTIAL FILL [3:5]</option>
-                        <option value="atr_partial_2">📊 PARTIAL FILL [2:4]</option>
+                    <optgroup label="Multi-Factor Confluence Engines">
+                        <option value="crypto_pro">👑 CRYPTO SMART PRO v2 (Confluence + Retest)</option>
                     </optgroup>
                 </select>
                 <button
@@ -166,49 +165,63 @@
         {/if}
 
         {#if stats}
-            <div class="grid grid-cols-4 gap-2">
-                <div
-                    class="bg-panel p-2 rounded border border-border/50 text-center"
-                >
-                    <div class="text-[8px] text-slate-500 uppercase">
-                        Trades
+            <!-- Institutional Quant Metrics Grid -->
+            <div class="space-y-1.5 bg-black/25 p-2.5 rounded-xl border border-border/40">
+                <div class="text-[8px] font-bold text-slate-400 uppercase tracking-wider flex justify-between items-center">
+                    <span>Performance Matrix</span>
+                    <span class="text-accent font-mono">{stats.count} Trades</span>
+                </div>
+                <div class="grid grid-cols-4 gap-1.5 text-center">
+                    <div class="bg-panel/80 p-1.5 rounded border border-border/30">
+                        <div class="text-[7.5px] text-slate-500 uppercase">Win Rate</div>
+                        <div class="text-[9.5px] font-bold {parseFloat(stats.wr) >= 50 ? 'text-bull' : 'text-bear'}">
+                            {stats.wr}%
+                        </div>
                     </div>
-                    <div class="text-[10px] font-bold text-white">
-                        {stats.count}
+                    <div class="bg-panel/80 p-1.5 rounded border border-border/30">
+                        <div class="text-[7.5px] text-slate-500 uppercase">Profit Factor</div>
+                        <div class="text-[9.5px] font-bold {parseFloat(stats.pf) >= 1.5 ? 'text-bull' : 'text-slate-200'}">
+                            {stats.pf}
+                        </div>
+                    </div>
+                    <div class="bg-panel/80 p-1.5 rounded border border-border/30">
+                        <div class="text-[7.5px] text-slate-500 uppercase">Sharpe</div>
+                        <div class="text-[9.5px] font-bold {parseFloat(stats.sharpe) >= 1.5 ? 'text-bull' : (parseFloat(stats.sharpe) >= 1.0 ? 'text-amber-400' : 'text-slate-300')}">
+                            {stats.sharpe}
+                        </div>
+                    </div>
+                    <div class="bg-panel/80 p-1.5 rounded border border-border/30">
+                        <div class="text-[7.5px] text-slate-500 uppercase">Sortino</div>
+                        <div class="text-[9.5px] font-bold {parseFloat(stats.sortino) >= 2.0 ? 'text-bull' : 'text-slate-300'}">
+                            {stats.sortino}
+                        </div>
                     </div>
                 </div>
-                <div
-                    class="bg-panel p-2 rounded border border-border/50 text-center"
-                >
-                    <div class="text-[8px] text-slate-500 uppercase">Win%</div>
-                    <div
-                        class="text-[10px] font-bold {parseFloat(stats.wr) >= 50
-                            ? 'text-bull'
-                            : 'text-bear'}"
-                    >
-                        {stats.wr}%
+
+                <div class="grid grid-cols-4 gap-1.5 text-center">
+                    <div class="bg-panel/80 p-1.5 rounded border border-border/30">
+                        <div class="text-[7.5px] text-slate-500 uppercase">Max DD</div>
+                        <div class="text-[9.5px] font-bold {parseFloat(stats.mdd) > 15 ? 'text-bear' : 'text-slate-300'}">
+                            -{stats.mdd}%
+                        </div>
                     </div>
-                </div>
-                <div
-                    class="bg-panel p-2 rounded border border-border/50 text-center"
-                >
-                    <div class="text-[8px] text-slate-500 uppercase">
-                        Profit
+                    <div class="bg-panel/80 p-1.5 rounded border border-border/30">
+                        <div class="text-[7.5px] text-slate-500 uppercase">Expectancy</div>
+                        <div class="text-[9.5px] font-bold {parseFloat(stats.expectancy) >= 0 ? 'text-bull' : 'text-bear'}">
+                            ${stats.expectancy}
+                        </div>
                     </div>
-                    <div
-                        class="text-[10px] font-bold {parseFloat(stats.pnl) >= 0
-                            ? 'text-bull'
-                            : 'text-bear'}"
-                    >
-                        {stats.pnl}R
+                    <div class="bg-panel/80 p-1.5 rounded border border-border/30">
+                        <div class="text-[7.5px] text-slate-500 uppercase">Payoff (W/L)</div>
+                        <div class="text-[9.5px] font-bold text-slate-200">
+                            {stats.payoff}
+                        </div>
                     </div>
-                </div>
-                <div
-                    class="bg-panel p-2 rounded border border-border/50 text-center"
-                >
-                    <div class="text-[8px] text-slate-500 uppercase">PF</div>
-                    <div class="text-[10px] font-bold text-white">
-                        {stats.pf}
+                    <div class="bg-panel/80 p-1.5 rounded border border-border/30">
+                        <div class="text-[7.5px] text-slate-500 uppercase">Calmar</div>
+                        <div class="text-[9.5px] font-bold text-slate-200">
+                            {stats.calmar}
+                        </div>
                     </div>
                 </div>
             </div>
@@ -338,7 +351,7 @@
     </div>
 
     <div class="flex-1 overflow-y-auto custom-scroll p-2 space-y-2">
-        {#each $state.trades as res}
+        {#each $state.trades.slice().sort((a, b) => (b.time || 0) - (a.time || 0)) as res}
             <div
                 on:click={() => replayTrade(res)}
                 class="bg-panel border border-border/50 p-3 rounded hover:border-accent transition-all cursor-pointer group flex justify-between items-center"

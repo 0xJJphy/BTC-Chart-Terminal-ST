@@ -35,8 +35,8 @@
     let subFragilityHist, subFragilityWarning;
     let subRsiSeries, subRsiOb, subRsiOs, subRsiMid;
     let subMacdSeries, subSigSeries, subHistSeries;
-    let subAdxSeries, subDiPlusSeries, subDiMinusSeries, subAdxThreshold;
     let subVolDeltaHist, subVolSmaSeries;
+    let isTradeSummaryCollapsed = false;
 
     let activeSubPane = "CVD"; // "CVD", "Z_SCORE", "DER", "FRAGILITY", "VOL", "RSI", "MACD", "ADX"
 
@@ -651,55 +651,67 @@
         {#if $state.isReplayMode && $state.selectedTrade}
             {@const t = $state.selectedTrade}
             <div
-                class="absolute top-3 left-1/2 -translate-x-1/2 bg-black/85 backdrop-blur-md px-4 py-2 rounded-xl border border-accent/50 shadow-2xl flex items-center gap-4 z-50 text-[9.5px] font-mono"
+                class="absolute top-3 left-1/2 -translate-x-1/2 bg-black/85 backdrop-blur-md px-3 py-1.5 rounded-xl border border-accent/50 shadow-2xl flex items-center gap-3 z-50 text-[9.5px] font-mono transition-all"
             >
                 <div class="flex items-center gap-2">
                     <span class="w-2.5 h-2.5 rounded-full {t.status === 'WIN' ? 'bg-bull' : 'bg-bear'} animate-pulse"></span>
                     <span class="font-bold {t.type === 'LONG' ? 'text-bull' : 'text-bear'} text-[10px] uppercase">
                         {t.type} {t.outcome || t.status}
                     </span>
-                    <span class="text-slate-400">
+                    <span class="text-slate-400 font-bold">
                         ({t.pnl >= 0 ? '+' : ''}{t.pnl?.toFixed(2)}R)
                     </span>
                 </div>
 
-                <div class="h-4 w-[1px] bg-border/60"></div>
+                {#if !isTradeSummaryCollapsed}
+                    <div class="h-4 w-[1px] bg-border/60"></div>
 
-                <!-- Price Levels -->
-                <div class="flex items-center gap-2.5 text-slate-300">
-                    <span>Entry: <strong class="text-white">${t.entry?.toFixed(2)}</strong></span>
-                    <span>SL: <strong class="text-bear">${t.sl?.toFixed(2)}</strong></span>
-                    <span>
-                        {#if t.tp1}
-                            TP1: <strong class="text-bull">${t.tp1?.toFixed(2)}</strong>
-                            {#if t.tp2} | TP2: <strong class="text-bull">${t.tp2?.toFixed(2)}</strong>{/if}
-                            {#if t.tp3} | TP3: <strong class="text-bull">${t.tp3?.toFixed(2)}</strong>{/if}
-                        {:else}
-                            TP: <strong class="text-bull">${t.tp?.toFixed(2)}</strong>
-                        {/if}
-                    </span>
-                </div>
-
-                <div class="h-4 w-[1px] bg-border/60"></div>
-
-                <!-- Indicator Confluence -->
-                <div class="flex items-center gap-2 text-slate-400">
-                    <span class="bg-blue-900/50 text-blue-300 px-1.5 py-0.5 rounded text-[8.5px] font-bold">
-                        Score: {t.setupScore?.toFixed(0) || t.score || 70}
-                    </span>
-                    {#if t.desc}
-                        <span class="text-slate-300 font-sans text-[9px] max-w-[200px] truncate" title={t.desc}>
-                            {t.desc}
+                    <!-- Price Levels -->
+                    <div class="flex items-center gap-2.5 text-slate-300">
+                        <span>Entry: <strong class="text-white">${t.entry?.toFixed(2)}</strong></span>
+                        <span>SL: <strong class="text-bear">${t.sl?.toFixed(2)}</strong></span>
+                        <span>
+                            {#if t.tp1}
+                                TP1: <strong class="text-bull">${t.tp1?.toFixed(2)}</strong>
+                                {#if t.tp2} | TP2: <strong class="text-bull">${t.tp2?.toFixed(2)}</strong>{/if}
+                                {#if t.tp3} | TP3: <strong class="text-bull">${t.tp3?.toFixed(2)}</strong>{/if}
+                            {:else}
+                                TP: <strong class="text-bull">${t.tp?.toFixed(2)}</strong>
+                            {/if}
                         </span>
-                    {/if}
-                </div>
+                    </div>
 
-                <button
-                    on:click={() => state.update((s) => ({ ...s, isReplayMode: false }))}
-                    class="bg-white/10 hover:bg-white/20 text-white px-2 py-1 rounded text-[8.5px] font-bold uppercase transition-colors"
-                >
-                    Exit
-                </button>
+                    <div class="h-4 w-[1px] bg-border/60"></div>
+
+                    <!-- Indicator Confluence -->
+                    <div class="flex items-center gap-2 text-slate-400">
+                        <span class="bg-blue-900/50 text-blue-300 px-1.5 py-0.5 rounded text-[8.5px] font-bold">
+                            Score: {t.setupScore?.toFixed(0) || t.score || 70}
+                        </span>
+                        {#if t.desc}
+                            <span class="text-slate-300 font-sans text-[9px] max-w-[180px] truncate" title={t.desc}>
+                                {t.desc}
+                            </span>
+                        {/if}
+                    </div>
+                {/if}
+
+                <div class="flex items-center gap-1.5">
+                    <button
+                        on:click={() => isTradeSummaryCollapsed = !isTradeSummaryCollapsed}
+                        class="text-slate-400 hover:text-white px-1.5 py-0.5 rounded text-[9px] transition-colors"
+                        title={isTradeSummaryCollapsed ? "Expand Summary" : "Collapse Summary"}
+                    >
+                        <i class="fas {isTradeSummaryCollapsed ? 'fa-chevron-down' : 'fa-chevron-up'}"></i>
+                    </button>
+
+                    <button
+                        on:click={() => import("../lib/logic/app_controller.js").then(m => m.exitReplay())}
+                        class="bg-white/10 hover:bg-white/20 text-white px-2 py-1 rounded text-[8.5px] font-bold uppercase transition-colors"
+                    >
+                        Exit
+                    </button>
+                </div>
             </div>
         {/if}
 

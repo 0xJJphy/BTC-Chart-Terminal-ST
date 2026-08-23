@@ -80,16 +80,13 @@ export function calculatePnLMetrics(trades, candles, config = {}) {
         }
     });
 
-    const totalTrades = closedTrades.length;
-    const winRate = totalTrades > 0 ? (wins / totalTrades) * 100 : 0;
-    const profitFactor = grossLoss > 0 ? (grossProfit / grossLoss) : (grossProfit > 0 ? 999 : 0);
-    const meanReturn = returns.length > 0 ? returns.reduce((a, b) => a + b, 0) / returns.length : 0;
-    const stdDev = returns.length > 1 ? Math.sqrt(returns.map(x => Math.pow(x - meanReturn, 2)).reduce((a, b) => a + b, 0) / returns.length) : 0;
-    const sharpe = stdDev > 0 ? meanReturn / stdDev : 0;
-
-    const downsideReturns = returns.filter(x => x < 0);
-    const stdDevDown = downsideReturns.length > 0 ? Math.sqrt(downsideReturns.map(x => Math.pow(x, 2)).reduce((a, b) => a + b, 0) / downsideReturns.length) : 0;
-    const sortino = stdDevDown > 0 ? meanReturn / stdDevDown : 0;
+    const avgWin = wins > 0 ? grossProfit / wins : 0;
+    const avgLoss = losses > 0 ? grossLoss / losses : 0;
+    const payoffRatio = avgLoss > 0 ? avgWin / avgLoss : (avgWin > 0 ? 999 : 0);
+    const winPct = totalTrades > 0 ? wins / totalTrades : 0;
+    const lossPct = totalTrades > 0 ? losses / totalTrades : 0;
+    const expectancy = (winPct * avgWin) - (lossPct * avgLoss);
+    const calmar = maxDrawdown > 0 ? (realizedPnL / initialBalance) / maxDrawdown : 0;
 
     return {
         metrics: {
@@ -99,6 +96,11 @@ export function calculatePnLMetrics(trades, candles, config = {}) {
             sharpe,
             sortino,
             maxDrawdown: maxDrawdown * 100,
+            expectancy,
+            payoffRatio,
+            calmar,
+            avgWin,
+            avgLoss,
             totalPnL: realizedPnL,
             currentEquity: currentEquity + unrealizedPnL,
             realizedPnL,
