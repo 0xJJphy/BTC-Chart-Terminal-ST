@@ -6,8 +6,14 @@ import { runLiquidityStrategy, runOptimizer } from './liquidity.js';
 import { calculatePnLMetrics } from './pnl.js';
 import { zoomRange, prepareReplayData } from './replay.js';
 
-// Rust Wasm Engine
-import init, { analyze_market_wasm, run_optimizer_wasm } from '../wasm/btc_engine.js';
+// Rust Wasm Engine v2.0 (SMC + CVD + Volume Profile + Resampler)
+import init, { 
+    analyze_market_wasm, 
+    run_optimizer_wasm,
+    analyze_cvd_wasm,
+    calculate_volume_profile_wasm,
+    resample_candles_wasm
+} from '../wasm/btc_engine.js';
 
 let wasmReady = false;
 async function ensureWasm() {
@@ -345,12 +351,24 @@ export async function manualRefresh() {
             trades = strategyResult.trades || [];
         }
 
+        // Compute Quantitative CVD & Volume Profile via Rust Wasm
+        let cvdData = null;
+        let volumeProfile = null;
+        try {
+            cvdData = analyze_cvd_wasm(candles, 14, 20);
+            volumeProfile = calculate_volume_profile_wasm(candles, 70);
+        } catch (wasmErr) {
+            console.warn("Wasm CVD / VP error:", wasmErr);
+        }
+
         return {
             ...s,
             zones: rustResult.zones || [], 
             trades: trades,
             lines,
             channel,
+            cvdData,
+            volumeProfile,
             pnlMetrics: { ...s.pnlMetrics, hurst: hurst.hurst, hurstType: hurst.type }
         };
     });

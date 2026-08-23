@@ -9,6 +9,10 @@ pub struct Candle {
     pub low: f64,
     pub close: f64,
     pub volume: Option<f64>,
+    pub delta: Option<f64>,
+    pub buy_volume: Option<f64>,
+    pub sell_volume: Option<f64>,
+    pub txn_count: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

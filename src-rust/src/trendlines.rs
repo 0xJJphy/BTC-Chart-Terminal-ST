@@ -47,7 +47,7 @@ pub fn calculate_trend_lines(candles: &[Candle]) -> Vec<TrendLine> {
             if slope >= 0.0 { continue; } // Buscamos líneas descendentes
 
             let mut valid = true;
-            let mut touches = vec![idx1, idx2];
+            let touches = vec![idx1, idx2];
             
             for k in (idx1 + 1)..idx2 {
                 if candles[k].high > candles[idx1].high + slope * (k - idx1) as f64 {

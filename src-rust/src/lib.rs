@@ -3,11 +3,17 @@ pub mod indicators;
 pub mod smc;
 pub mod liquidity;
 pub mod trendlines;
+pub mod cvd;
+pub mod volume_profile;
+pub mod resampler;
 
 use wasm_bindgen::prelude::*;
 use models::{Candle, Zone, Trade};
 use smc::analyze_smc;
 use liquidity::run_optimizer_rust;
+use cvd::analyze_cvd;
+use volume_profile::calculate_volume_profile;
+use resampler::resample_candles;
 use serde::{Serialize};
 
 #[derive(Serialize)]
@@ -37,6 +43,27 @@ pub fn run_optimizer_wasm(js_candles: JsValue, sensitivity: f64) -> JsValue {
 }
 
 #[wasm_bindgen]
+pub fn analyze_cvd_wasm(js_candles: JsValue, sma_period: usize, div_lookback: usize) -> JsValue {
+    let candles: Vec<Candle> = serde_wasm_bindgen::from_value(js_candles).unwrap_or_default();
+    let result = analyze_cvd(&candles, sma_period, div_lookback);
+    serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
+}
+
+#[wasm_bindgen]
+pub fn calculate_volume_profile_wasm(js_candles: JsValue, num_bins: usize) -> JsValue {
+    let candles: Vec<Candle> = serde_wasm_bindgen::from_value(js_candles).unwrap_or_default();
+    let result = calculate_volume_profile(&candles, num_bins);
+    serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
+}
+
+#[wasm_bindgen]
+pub fn resample_candles_wasm(js_candles: JsValue, target_seconds: u64) -> JsValue {
+    let candles: Vec<Candle> = serde_wasm_bindgen::from_value(js_candles).unwrap_or_default();
+    let result = resample_candles(&candles, target_seconds);
+    serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
+}
+
+#[wasm_bindgen]
 pub fn greet() -> String {
-    "BTC Engine Rust Wasm Ready!".to_string()
+    "BTC Engine Rust Wasm v2.0 (SMC + CVD + Volume Profile + Resampler) Ready!".to_string()
 }

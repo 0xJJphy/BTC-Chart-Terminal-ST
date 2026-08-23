@@ -58,6 +58,8 @@ export const state = writable({
     regPeriod: 200,
     regStd: 2.0,
     useVolumeAnalysis: false,
+    cvdData: null,
+    volumeProfile: null,
     includeFees: false,
     feeMaker: 0.1,
     feeTaker: 0.1
