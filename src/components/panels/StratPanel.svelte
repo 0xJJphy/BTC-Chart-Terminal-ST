@@ -80,12 +80,14 @@
                     bind:value={selectedStrat}
                     class="flex-1 bg-bg border border-border text-[10px] text-white rounded px-2 py-2 outline-none font-bold appearance-none cursor-pointer"
                 >
+                    <optgroup label="Quantitative Confluence">
+                        <option value="CRYPTO_PRO">👑 CRYPTO SMART PRO v2 (Confluence + Retest)</option>
+                    </optgroup>
                     <optgroup label="SMC Logic">
                         <option value="SMC">SMC Reversal (OB/FVG)</option>
                     </optgroup>
                     <optgroup label="Core Traps (Fixed R)">
-                        <option value="standard">🏹 LIQUIDITY TRAP (2:1)</option
-                        >
+                        <option value="standard">🏹 LIQUIDITY TRAP (2:1)</option>
                         <option value="agro">🔥 TRAP AGGRESSIVE (3:1)</option>
                     </optgroup>
                     <optgroup label="Enhanced Traps (ATR)">
@@ -93,12 +95,8 @@
                         <option value="atr_agro">⚡ ATR AGGRO (3:1)</option>
                     </optgroup>
                     <optgroup label="Professional (Partial)">
-                        <option value="atr_partial_1"
-                            >💎 PARTIAL FILL [3:5]</option
-                        >
-                        <option value="atr_partial_2"
-                            >📊 PARTIAL FILL [2:4]</option
-                        >
+                        <option value="atr_partial_1">💎 PARTIAL FILL [3:5]</option>
+                        <option value="atr_partial_2">📊 PARTIAL FILL [2:4]</option>
                     </optgroup>
                 </select>
                 <button
@@ -211,6 +209,127 @@
                     <div class="text-[8px] text-slate-500 uppercase">PF</div>
                     <div class="text-[10px] font-bold text-white">
                         {stats.pf}
+                    </div>
+                </div>
+            </div>
+        {/if}
+
+        <!-- CRYPTO SMART PRO v2 DASHBOARD TABLE -->
+        {#if $state.cryptoProDashboard}
+            {@const cp = $state.cryptoProDashboard}
+            <div class="bg-black/40 rounded-xl border border-blue-500/40 overflow-hidden shadow-2xl space-y-0 text-[9px] font-mono">
+                <!-- Header -->
+                <div class="bg-blue-600 px-3 py-1.5 flex justify-between items-center text-white font-bold text-[10px] tracking-wider uppercase">
+                    <span class="flex items-center gap-1.5">
+                        <i class="fas fa-crown text-yellow-300"></i>
+                        CRYPTO PRO v2
+                    </span>
+                    <span class="bg-blue-800 px-1.5 py-0.5 rounded text-[8.5px]">
+                        4H / 15D
+                    </span>
+                </div>
+
+                <div class="divide-y divide-border/20 text-slate-300">
+                    <!-- Signal & Strength -->
+                    <div class="flex justify-between px-3 py-1 bg-black/20 font-bold">
+                        <span class="text-slate-400">SEÑAL</span>
+                        <span class="{cp.signal === 'LONG' ? 'text-bull font-extrabold' : cp.signal === 'SHORT' ? 'text-bear font-extrabold' : 'text-slate-400'}">
+                            {cp.signal}
+                        </span>
+                    </div>
+
+                    <div class="flex justify-between px-3 py-1">
+                        <span class="text-slate-400">FUERZA</span>
+                        <span class="text-white">L {cp.strengthLong.toFixed(0)} / S {cp.strengthShort.toFixed(0)}</span>
+                    </div>
+
+                    <div class="flex justify-between px-3 py-1">
+                        <span class="text-slate-400">PROBABILIDAD</span>
+                        <span class="text-bull">up {cp.probUp.toFixed(0)}% <span class="text-slate-500">/</span> <span class="text-bear">dn {cp.probDn.toFixed(0)}%</span></span>
+                    </div>
+
+                    <div class="flex justify-between px-3 py-1">
+                        <span class="text-slate-400">REGIMEN ADX</span>
+                        <span class="text-emerald-400 font-bold">{cp.adxValue.toFixed(1)} {cp.adxRegime}</span>
+                    </div>
+
+                    <div class="flex justify-between px-3 py-1">
+                        <span class="text-slate-400">SESGO DI</span>
+                        <span class="{cp.diBias.includes('ALCISTA') ? 'text-bull' : 'text-bear'}">{cp.diBias}</span>
+                    </div>
+
+                    <div class="flex justify-between px-3 py-1">
+                        <span class="text-slate-400">MACD / RSI</span>
+                        <span class="text-slate-200">{cp.macdState} <span class="text-slate-500">|</span> {cp.rsiValue.toFixed(1)} {cp.rsiState}</span>
+                    </div>
+
+                    <div class="flex justify-between px-3 py-1">
+                        <span class="text-slate-400">VOLUMEN</span>
+                        <span class="text-white">{cp.volumeRatio}x {cp.volumeState}</span>
+                    </div>
+
+                    <div class="flex justify-between px-3 py-1">
+                        <span class="text-slate-400">TRAMPA</span>
+                        <span class="{cp.trapState !== 'NINGUNA' ? 'text-amber-400 font-bold' : 'text-slate-400'}">{cp.trapState}</span>
+                    </div>
+
+                    <!-- Risk & Order Levels -->
+                    <div class="flex justify-between px-3 py-1 bg-black/30 font-bold">
+                        <span class="text-slate-400">ENTRADA / SL</span>
+                        <span class="text-white">${cp.currentEntry.toFixed(2)} <span class="text-slate-500">|</span> <span class="text-bear">${cp.currentSl.toFixed(2)}</span></span>
+                    </div>
+
+                    <div class="flex justify-between px-3 py-1 bg-black/30">
+                        <span class="text-slate-400">TP1 (50%) / TP2 / TP3</span>
+                        <span class="text-bull">${cp.currentTp1.toFixed(0)} <span class="text-slate-500">/</span> ${cp.currentTp2.toFixed(0)} <span class="text-slate-500">/</span> ${cp.currentTp3.toFixed(0)}</span>
+                    </div>
+
+                    <!-- Global Stats -->
+                    <div class="flex justify-between px-3 py-1 bg-blue-950/40 text-blue-300 font-bold">
+                        <span>ESTADÍSTICAS</span>
+                        <span>GLOBAL ({cp.totalTrades} OPS)</span>
+                    </div>
+
+                    <div class="flex justify-between px-3 py-1">
+                        <span class="text-slate-400">GANADORAS / PERDEDORAS</span>
+                        <span><span class="text-bull font-bold">{cp.winningTrades}</span> <span class="text-slate-500">/</span> <span class="text-bear font-bold">{cp.losingTrades}</span></span>
+                    </div>
+
+                    <div class="flex justify-between px-3 py-1">
+                        <span class="text-slate-400">TP1 / TP2 / TP3 HITS</span>
+                        <span class="text-slate-200">{cp.tp1Count} / {cp.tp2Count} / {cp.tp3Count}</span>
+                    </div>
+
+                    <div class="flex justify-between px-3 py-1 font-bold">
+                        <span class="text-slate-400">WIN RATE GLOBAL</span>
+                        <span class="{cp.winRate >= 50 ? 'text-bull' : 'text-bear'}">{cp.winRate.toFixed(1)}%</span>
+                    </div>
+
+                    <!-- Capital / PnL -->
+                    <div class="flex justify-between px-3 py-1 bg-blue-950/40 text-blue-300 font-bold">
+                        <span>CAPITAL / P&L</span>
+                        <span class="{cp.totalPnl >= 0 ? 'text-bull' : 'text-bear'}">{cp.totalPnl >= 0 ? '+' : ''}${cp.totalPnl.toFixed(2)}</span>
+                    </div>
+
+                    <div class="flex justify-between px-3 py-1">
+                        <span class="text-slate-400">CAPITAL ACTUAL</span>
+                        <span class="text-white font-bold">${cp.currentCapital.toFixed(2)} <span class="text-[8px] text-slate-500">(Lev x{cp.leverage})</span></span>
+                    </div>
+
+                    <!-- Period Analysis -->
+                    <div class="flex justify-between px-3 py-1 bg-blue-950/40 text-blue-300 font-bold">
+                        <span>PERIODO ({cp.analysisDays} DÍAS)</span>
+                        <span class="{cp.periodPnl >= 0 ? 'text-bull' : 'text-bear'}">{cp.periodPnl >= 0 ? '+' : ''}${cp.periodPnl.toFixed(2)}</span>
+                    </div>
+
+                    <div class="flex justify-between px-3 py-1">
+                        <span class="text-slate-400">P&L / DÍA & WR PERIODO</span>
+                        <span class="text-slate-200">${cp.pnlPerDay.toFixed(2)}/d <span class="text-slate-500">|</span> <span class="{cp.periodWinRate >= 50 ? 'text-bull' : 'text-bear'}">{cp.periodWinRate.toFixed(0)}%</span></span>
+                    </div>
+
+                    <div class="flex justify-between px-3 py-1 font-bold bg-black/40">
+                        <span class="text-slate-400">ESTADO LIMIT</span>
+                        <span class="{cp.limitStatus.includes('✓') ? 'text-bull' : 'text-amber-400'}">{cp.limitStatus}</span>
                     </div>
                 </div>
             </div>

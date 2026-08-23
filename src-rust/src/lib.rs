@@ -6,6 +6,7 @@ pub mod trendlines;
 pub mod cvd;
 pub mod volume_profile;
 pub mod resampler;
+pub mod crypto_pro;
 
 use wasm_bindgen::prelude::*;
 use models::{Candle, Zone, Trade};
@@ -14,6 +15,7 @@ use liquidity::run_optimizer_rust;
 use cvd::analyze_anchored_cvd;
 use volume_profile::calculate_volume_profile;
 use resampler::resample_candles;
+use crypto_pro::{analyze_crypto_pro, CryptoProConfig};
 use serde::{Serialize};
 
 #[derive(Serialize)]
@@ -71,6 +73,14 @@ pub fn resample_candles_wasm(js_candles: JsValue, target_seconds: u64) -> JsValu
 }
 
 #[wasm_bindgen]
+pub fn analyze_crypto_pro_wasm(js_candles: JsValue, js_config: JsValue) -> JsValue {
+    let candles: Vec<Candle> = serde_wasm_bindgen::from_value(js_candles).unwrap_or_default();
+    let config: CryptoProConfig = serde_wasm_bindgen::from_value(js_config).unwrap_or_default();
+    let result = analyze_crypto_pro(&candles, &config);
+    serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
+}
+
+#[wasm_bindgen]
 pub fn greet() -> String {
-    "BTC Engine Rust Wasm v2.0 (SMC + CVD + Volume Profile + Resampler) Ready!".to_string()
+    "BTC Engine Rust Wasm v2.1 (SMC + CVD + Volume Profile + Resampler + CryptoPro) Ready!".to_string()
 }

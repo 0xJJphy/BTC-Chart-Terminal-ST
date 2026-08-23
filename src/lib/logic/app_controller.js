@@ -6,14 +6,15 @@ import { runLiquidityStrategy, runOptimizer } from './liquidity.js';
 import { calculatePnLMetrics } from './pnl.js';
 import { zoomRange, prepareReplayData } from './replay.js';
 
-// Rust Wasm Engine v2.0 (SMC + CVD + Volume Profile + Resampler)
+// Rust Wasm Engine v2.1 (SMC + CVD + Volume Profile + Resampler + CryptoPro)
 import init, { 
     analyze_market_wasm, 
     run_optimizer_wasm,
     analyze_cvd_wasm,
     analyze_anchored_cvd_wasm,
     calculate_volume_profile_wasm,
-    resample_candles_wasm
+    resample_candles_wasm,
+    analyze_crypto_pro_wasm
 } from '../wasm/btc_engine.js';
 
 let wasmReady = false;
@@ -332,7 +333,49 @@ export async function manualRefresh() {
         const hurst = calculateHurst(candles);
 
         let trades = [];
-        if (s.activeStrategy === 'SMC') {
+        let cryptoProDashboard = null;
+
+        if (s.activeStrategy === 'CRYPTO_PRO') {
+            try {
+                const proRes = analyze_crypto_pro_wasm(candles, {
+                    showEma: true,
+                    pivotLeft: 6,
+                    pivotRight: 6,
+                    maxLevels: 3,
+                    fvgMinPct: 0.08,
+                    obLookback: 8,
+                    volumeLength: 20,
+                    highVolume: 1.50,
+                    veryHighVolume: 2.00,
+                    minimumScore: 65.0,
+                    waitForRetest: true,
+                    minPullbackAtr: 0.30,
+                    maxPullbackAtr: 1.50,
+                    minPullbackPct: 0.15,
+                    maxWaitBars: 8,
+                    requireRecoveryCandle: true,
+                    atrLength: 14,
+                    atrMultiplier: 1.50,
+                    maxSlAtr: 2.50,
+                    rrTp1: 1.0,
+                    rrTp2: 2.0,
+                    rrTp3: 3.0,
+                    initialCapital: s.initialBalance || 1000.0,
+                    capitalPerTrade: 150.0,
+                    leverage: 10.0,
+                    riskPercent: 2.0,
+                    compoundCapital: false,
+                    compoundPercent: 15.0,
+                    analysisDays: 15,
+                });
+                if (proRes) {
+                    trades = proRes.trades || [];
+                    cryptoProDashboard = proRes.dashboard || null;
+                }
+            } catch (err) {
+                console.warn("CryptoPRO Wasm error:", err);
+            }
+        } else if (s.activeStrategy === 'SMC') {
             trades = rustResult.trades || []; 
         } else {
             const modeMap = {
@@ -370,6 +413,7 @@ export async function manualRefresh() {
             channel,
             cvdData,
             volumeProfile,
+            cryptoProDashboard,
             pnlMetrics: { ...s.pnlMetrics, hurst: hurst.hurst, hurstType: hurst.type }
         };
     });
@@ -400,17 +444,62 @@ export async function executeStrategy(mode = 'standard') {
     let currentState = {};
     state.update(s => { currentState = s; return s; });
 
-    const strategyResult = runLiquidityStrategy(dataset, mode, {
-        useVolumeAnalysis: currentState.useVolumeAnalysis,
-        config: {
-            sensitivity: APP.sensitivity,
-            historyTarget: dataset.length,
-            fractalStrength: currentState.fractalStrength,
-            angleFilter: currentState.angleFilter
-        }
-    });
+    let trades = [];
+    let cryptoProDashboard = null;
 
-    const trades = strategyResult.trades || [];
+    if (mode === 'CRYPTO_PRO') {
+        try {
+            const proRes = analyze_crypto_pro_wasm(dataset, {
+                showEma: true,
+                pivotLeft: 6,
+                pivotRight: 6,
+                maxLevels: 3,
+                fvgMinPct: 0.08,
+                obLookback: 8,
+                volumeLength: 20,
+                highVolume: 1.50,
+                veryHighVolume: 2.00,
+                minimumScore: 65.0,
+                waitForRetest: true,
+                minPullbackAtr: 0.30,
+                maxPullbackAtr: 1.50,
+                minPullbackPct: 0.15,
+                maxWaitBars: 8,
+                requireRecoveryCandle: true,
+                atrLength: 14,
+                atrMultiplier: 1.50,
+                maxSlAtr: 2.50,
+                rrTp1: 1.0,
+                rrTp2: 2.0,
+                rrTp3: 3.0,
+                initialCapital: currentState.initialBalance || 1000.0,
+                capitalPerTrade: 150.0,
+                leverage: 10.0,
+                riskPercent: 2.0,
+                compoundCapital: false,
+                compoundPercent: 15.0,
+                analysisDays: 15,
+            });
+            if (proRes) {
+                trades = proRes.trades || [];
+                cryptoProDashboard = proRes.dashboard || null;
+            }
+        } catch (e) {
+            console.warn("Error running CryptoPRO in Wasm:", e);
+        }
+    } else {
+        const strategyResult = runLiquidityStrategy(dataset, mode, {
+            useVolumeAnalysis: currentState.useVolumeAnalysis,
+            config: {
+                sensitivity: APP.sensitivity,
+                historyTarget: dataset.length,
+                fractalStrength: currentState.fractalStrength,
+                angleFilter: currentState.angleFilter
+            }
+        });
+        trades = strategyResult.trades || [];
+    }
+
     const pnlRes = calculatePnLMetrics(trades, dataset, {
         initialBalance: currentState.initialBalance,
         includeFees: currentState.includeFees,
@@ -421,6 +510,7 @@ export async function executeStrategy(mode = 'standard') {
     state.update(s => ({
         ...s,
         trades,
+        cryptoProDashboard,
         pnlMetrics: { ...s.pnlMetrics, ...pnlRes.metrics },
         equityCurve: pnlRes.equityCurve,
         pnlLocked: false

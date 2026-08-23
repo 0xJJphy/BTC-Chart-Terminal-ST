@@ -61,6 +61,7 @@ export const state = writable({
     cvdData: null,
     cvdAnchor: 'daily', // 'daily', 'weekly', 'monthly', 'quarterly', 'yearly'
     volumeProfile: null,
+    cryptoProDashboard: null,
     includeFees: false,
     feeMaker: 0.1,
     feeTaker: 0.1
