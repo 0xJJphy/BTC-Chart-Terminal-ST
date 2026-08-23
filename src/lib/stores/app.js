@@ -59,6 +59,7 @@ export const state = writable({
     regStd: 2.0,
     useVolumeAnalysis: false,
     cvdData: null,
+    cvdAnchor: 'daily', // 'daily', 'weekly', 'monthly', 'quarterly', 'yearly'
     volumeProfile: null,
     includeFees: false,
     feeMaker: 0.1,

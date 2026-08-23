@@ -11,7 +11,7 @@ use wasm_bindgen::prelude::*;
 use models::{Candle, Zone, Trade};
 use smc::analyze_smc;
 use liquidity::run_optimizer_rust;
-use cvd::analyze_cvd;
+use cvd::analyze_anchored_cvd;
 use volume_profile::calculate_volume_profile;
 use resampler::resample_candles;
 use serde::{Serialize};
@@ -45,7 +45,14 @@ pub fn run_optimizer_wasm(js_candles: JsValue, sensitivity: f64) -> JsValue {
 #[wasm_bindgen]
 pub fn analyze_cvd_wasm(js_candles: JsValue, sma_period: usize, div_lookback: usize) -> JsValue {
     let candles: Vec<Candle> = serde_wasm_bindgen::from_value(js_candles).unwrap_or_default();
-    let result = analyze_cvd(&candles, sma_period, div_lookback);
+    let result = analyze_anchored_cvd(&candles, "daily", sma_period, div_lookback);
+    serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
+}
+
+#[wasm_bindgen]
+pub fn analyze_anchored_cvd_wasm(js_candles: JsValue, anchor: &str, sma_period: usize, div_lookback: usize) -> JsValue {
+    let candles: Vec<Candle> = serde_wasm_bindgen::from_value(js_candles).unwrap_or_default();
+    let result = analyze_anchored_cvd(&candles, anchor, sma_period, div_lookback);
     serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
 }
 

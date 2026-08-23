@@ -11,6 +11,7 @@ import init, {
     analyze_market_wasm, 
     run_optimizer_wasm,
     analyze_cvd_wasm,
+    analyze_anchored_cvd_wasm,
     calculate_volume_profile_wasm,
     resample_candles_wasm
 } from '../wasm/btc_engine.js';
@@ -355,7 +356,7 @@ export async function manualRefresh() {
         let cvdData = null;
         let volumeProfile = null;
         try {
-            cvdData = analyze_cvd_wasm(candles, 14, 20);
+            cvdData = analyze_anchored_cvd_wasm(candles, s.cvdAnchor || 'daily', 20, 24);
             volumeProfile = calculate_volume_profile_wasm(candles, 70);
         } catch (wasmErr) {
             console.warn("Wasm CVD / VP error:", wasmErr);
@@ -536,5 +537,10 @@ export function updatePnL() {
             equityCurve: pnlRes.equityCurve
         };
     });
+}
+
+export function setCvdAnchor(anchor) {
+    state.update(s => ({ ...s, cvdAnchor: anchor }));
+    manualRefresh();
 }
 
