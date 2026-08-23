@@ -1,5 +1,6 @@
 <script>
     import { onMount, onDestroy } from "svelte";
+    import { get } from "svelte/store";
     import { createChart, CrosshairMode } from "lightweight-charts";
     import { state, APP } from "../lib/stores/app.js";
     import {
@@ -185,10 +186,9 @@
         }
     }
 
-    function updateSubChartData() {
+    function updateSubChartData(passedState = null) {
         if (!subChart) return;
-        let s = {};
-        state.update(curr => { s = curr; return curr; });
+        const s = passedState || get(state);
         const candles = s.candles || [];
         if (candles.length === 0) return;
 

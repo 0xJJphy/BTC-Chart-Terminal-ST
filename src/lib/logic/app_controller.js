@@ -185,7 +185,7 @@ export async function runFullLoadPipeline() {
 
         startWebSocket({
             onTick: (_candle) => {
-                state.update(s => s);
+                // Live candle updates handled inside binance.js
             }
         });
     } catch (e) {
