@@ -54,4 +54,7 @@ pub struct Trade {
     pub exit_time: Option<u64>,
     pub setup_score: Option<f64>,
     pub dashboard_snapshot: Option<serde_json::Value>,
+    pub sr_level: Option<f64>,
+    pub sr_time: Option<u64>,
+    pub sr_type: Option<String>,
 }

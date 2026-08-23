@@ -212,7 +212,40 @@ export class TradeExecutionRenderer {
 
             if (yEntry === null || ySL === null) return;
 
-            // 1. Order Pending / Retest Phase (from signal to entry)
+            // 1. S/R Confluence Line (if present for this setup)
+            const srLevel = t.srLevel || t.sr_level;
+            const srTime = t.srTime || t.sr_time;
+            const srType = t.srType || t.sr_type || (t.type === 'LONG' ? 'SUPPORT' : 'RESISTANCE');
+            if (srLevel !== undefined && srLevel !== null) {
+                const ySR = series.priceToCoordinate(srLevel);
+                if (ySR !== null) {
+                    const xSRStart = srTime ? timeScale.timeToCoordinate(srTime) : (xSignal !== null ? xSignal - 100 : (xEntry !== null ? xEntry - 100 : null));
+                    const xSREnd = xExit !== null ? xExit : scope.mediaSize.width;
+
+                    if (xSRStart !== null && xSREnd !== null) {
+                        const effSRStartX = Math.max(0, xSRStart) * pixelRatio;
+                        const effSREndX = Math.min(scope.mediaSize.width, xSREnd) * pixelRatio;
+                        const effYSR = ySR * pixelRatio;
+
+                        ctx.save();
+                        ctx.setLineDash([6 * pixelRatio, 3 * pixelRatio]);
+                        ctx.strokeStyle = srType === 'SUPPORT' ? 'rgba(6, 182, 212, 0.85)' : 'rgba(244, 63, 94, 0.85)';
+                        ctx.lineWidth = 1.8 * pixelRatio;
+                        ctx.beginPath();
+                        ctx.moveTo(effSRStartX, effYSR);
+                        ctx.lineTo(effSREndX, effYSR);
+                        ctx.stroke();
+
+                        // Label
+                        ctx.fillStyle = srType === 'SUPPORT' ? '#06b6d4' : '#f43f5e';
+                        ctx.font = `bold ${Math.round(9 * pixelRatio)}px "JetBrains Mono", monospace`;
+                        ctx.fillText(`${srType} CONFLUENCE: $${srLevel.toFixed(1)}`, effSRStartX + 6 * pixelRatio, effYSR - 4 * pixelRatio);
+                        ctx.restore();
+                    }
+                }
+            }
+
+            // 2. Order Pending / Retest Phase (from signal to entry)
             if (xSignal !== null && xEntry !== null && xEntry > xSignal) {
                 const effXSig = Math.max(0, xSignal) * pixelRatio;
                 const effXEnt = Math.min(scope.mediaSize.width, xEntry) * pixelRatio;
@@ -232,10 +265,14 @@ export class TradeExecutionRenderer {
                 const topY = Math.min(yEntry, ySL) * pixelRatio;
                 const botY = Math.max(yEntry, ySL) * pixelRatio;
                 ctx.fillRect(effXSig, topY, effXEnt - effXSig, botY - topY);
+
+                ctx.fillStyle = '#eab308';
+                ctx.font = `bold ${Math.round(8.5 * pixelRatio)}px "JetBrains Mono", monospace`;
+                ctx.fillText(`ORDER PENDING RETEST`, effXSig + 4 * pixelRatio, effYEnt - 4 * pixelRatio);
                 ctx.restore();
             }
 
-            // 2. Active Trade Execution Phase (from entry to exit)
+            // 3. Active Trade Execution Phase (from entry to exit)
             if (xEntry !== null && xExit !== null) {
                 const startX = Math.max(0, xEntry) * pixelRatio;
                 const endX = Math.min(scope.mediaSize.width, xExit) * pixelRatio;
@@ -247,13 +284,13 @@ export class TradeExecutionRenderer {
                     const effYTP = yTP1 !== null ? yTP1 * pixelRatio : effYEnt;
 
                     // Green Profit Area
-                    ctx.fillStyle = 'rgba(8, 153, 129, 0.12)';
+                    ctx.fillStyle = 'rgba(8, 153, 129, 0.14)';
                     const topP = Math.min(effYEnt, effYTP);
                     const botP = Math.max(effYEnt, effYTP);
                     ctx.fillRect(startX, topP, w, botP - topP);
 
                     // Red Risk Area
-                    ctx.fillStyle = 'rgba(242, 54, 69, 0.12)';
+                    ctx.fillStyle = 'rgba(242, 54, 69, 0.14)';
                     const topR = Math.min(effYEnt, effYSL);
                     const botR = Math.max(effYEnt, effYSL);
                     ctx.fillRect(startX, topR, w, botR - topR);
@@ -302,6 +339,28 @@ export class TradeExecutionRenderer {
                         ctx.moveTo(startX, yTP3 * pixelRatio);
                         ctx.lineTo(endX, yTP3 * pixelRatio);
                         ctx.stroke();
+                    }
+
+                    // Bounded Text Labels on the Right
+                    ctx.font = `bold ${Math.round(8.5 * pixelRatio)}px "JetBrains Mono", monospace`;
+                    
+                    ctx.fillStyle = '#60a5fa';
+                    ctx.fillText(`ENTRY $${t.entry?.toFixed(1)}`, endX + 4 * pixelRatio, effYEnt + 3 * pixelRatio);
+
+                    ctx.fillStyle = '#f87171';
+                    ctx.fillText(`SL $${t.sl?.toFixed(1)}`, endX + 4 * pixelRatio, effYSL + 3 * pixelRatio);
+
+                    if (yTP1 !== null) {
+                        ctx.fillStyle = '#34d399';
+                        ctx.fillText(`TP1 $${(t.tp1 || t.tp)?.toFixed(1)}`, endX + 4 * pixelRatio, effYTP + 3 * pixelRatio);
+                    }
+                    if (yTP2 !== null && t.tp2) {
+                        ctx.fillStyle = '#10b981';
+                        ctx.fillText(`TP2 $${t.tp2.toFixed(1)}`, endX + 4 * pixelRatio, yTP2 * pixelRatio + 3 * pixelRatio);
+                    }
+                    if (yTP3 !== null && t.tp3) {
+                        ctx.fillStyle = '#059669';
+                        ctx.fillText(`TP3 $${t.tp3.toFixed(1)}`, endX + 4 * pixelRatio, yTP3 * pixelRatio + 3 * pixelRatio);
                     }
                 }
             }

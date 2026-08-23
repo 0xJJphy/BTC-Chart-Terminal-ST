@@ -27,6 +27,17 @@ export function getTradeMarkers(trade) {
     const signalT = trade.signalTime || trade.time;
     const entryT = trade.entryTime || trade.time;
 
+    // 0. S/R Pivot Anchor Marker
+    if (trade.srTime && trade.srLevel && trade.srTime !== signalT) {
+        markers.push({
+            time: trade.srTime,
+            position: trade.srType === 'SUPPORT' ? 'belowBar' : 'aboveBar',
+            color: trade.srType === 'SUPPORT' ? '#06b6d4' : '#f43f5e',
+            shape: 'circle',
+            text: `PIVOT ${trade.srType || 'S/R'} ($${trade.srLevel.toFixed(1)})`
+        });
+    }
+
     // 1. Setup / Order Placed Marker
     if (signalT && signalT !== entryT) {
         markers.push({

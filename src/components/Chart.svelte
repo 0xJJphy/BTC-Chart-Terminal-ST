@@ -43,69 +43,7 @@
 
     function updatePriceLines(trade) {
         clearPriceLines();
-        if (!trade || !candleSeries) return;
-
-        entryLine = candleSeries.createPriceLine({
-            price: trade.entry,
-            color: "#2962ff",
-            lineWidth: 2,
-            lineStyle: 0,
-            axisLabelVisible: true,
-            title: "ENTRY",
-        });
-
-        slLine = candleSeries.createPriceLine({
-            price: trade.sl,
-            color: "#f23645",
-            lineWidth: 2,
-            lineStyle: 0,
-            axisLabelVisible: true,
-            title: "SL",
-        });
-
-        if (trade.tp1 || trade.tp) {
-            tp1Line = candleSeries.createPriceLine({
-                price: trade.tp1 || trade.tp,
-                color: "#089981",
-                lineWidth: 2,
-                lineStyle: 0,
-                axisLabelVisible: true,
-                title: trade.tp2 ? "TP1 (50%)" : "TP",
-            });
-        }
-
-        if (trade.tp2) {
-            tp2Line = candleSeries.createPriceLine({
-                price: trade.tp2,
-                color: "#10b981",
-                lineWidth: 2,
-                lineStyle: 2,
-                axisLabelVisible: true,
-                title: "TP2 (25%)",
-            });
-        }
-
-        if (trade.tp3) {
-            tp3Line = candleSeries.createPriceLine({
-                price: trade.tp3,
-                color: "#34d399",
-                lineWidth: 2,
-                lineStyle: 2,
-                axisLabelVisible: true,
-                title: "TP3 (25%)",
-            });
-        }
-
-        if (trade.status === 'WIN' && trade.tp1) {
-            beLine = candleSeries.createPriceLine({
-                price: trade.entry,
-                color: "#eab308",
-                lineWidth: 1,
-                lineStyle: 1,
-                axisLabelVisible: true,
-                title: "BE (TRAIL)",
-            });
-        }
+        // Infinite full-chart lines disabled: bounded lines are now drawn strictly between entry and exit candles by TradeExecutionPrimitive
     }
 
     let boxPrimitive = new BoxPrimitive();

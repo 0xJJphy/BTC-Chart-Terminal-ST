@@ -239,6 +239,9 @@ pub fn analyze_crypto_pro(candles: &[Candle], config: &CryptoProConfig) -> Crypt
     let mut active_signal_time = 0;
     let mut active_score = 0.0;
     let mut active_snapshot: Option<serde_json::Value> = None;
+    let mut active_sr_level: Option<f64> = None;
+    let mut active_sr_time: Option<u64> = None;
+    let mut active_sr_type: Option<String> = None;
 
     let start_idx = 50.max(config.pivot_left + config.pivot_right + 1);
 
@@ -361,6 +364,9 @@ pub fn analyze_crypto_pro(candles: &[Candle], config: &CryptoProConfig) -> Crypt
                     exit_time: Some(c.time as u64),
                     setup_score: Some(active_score),
                     dashboard_snapshot: active_snapshot.clone(),
+                    sr_level: active_sr_level,
+                    sr_time: active_sr_time,
+                    sr_type: active_sr_type.clone(),
                 });
                 trade_id_counter += 1;
                 in_active_trade = false;
