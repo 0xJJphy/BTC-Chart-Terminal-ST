@@ -7,7 +7,7 @@
         replayTrade,
     } from "../../lib/logic/app_controller.js";
 
-    let selectedStrat = "standard";
+    let selectedStrat = "crypto_pro";
     let showOptimizer = false;
 
     function runBacktest() {
@@ -20,19 +20,27 @@
         showOptimizer = true;
     }
 
+    $: totalClosed = $state.trades.length;
+    $: winsCount = $state.trades.filter(t => t.status === 'WIN' || t.status === 'BE' || (t.pnl !== undefined && t.pnl > 0)).length;
+    $: lossesCount = $state.trades.filter(t => t.status === 'LOSS' || (t.pnl !== undefined && t.pnl < 0)).length;
+    $: calcTp1Count = $state.trades.filter(t => t.tp1_time || t.tp1Time || t.desc?.includes('TP') || t.status === 'WIN' || t.status === 'BE').length;
+    $: calcTp2Count = $state.trades.filter(t => t.tp2_time || t.tp2Time || t.desc?.includes('TP2') || t.desc?.includes('TP3')).length;
+    $: calcTp3Count = $state.trades.filter(t => t.tp3_time || t.tp3Time || t.desc?.includes('TP3')).length;
+    $: realWinRate = totalClosed > 0 ? ((winsCount / totalClosed) * 100) : 0;
+
     $: stats = (() => {
         if ($state.trades.length === 0) return null;
-        const wins = $state.trades.filter((r) => r.status === "WIN" || (r.pnl && r.pnl > 0)).length;
-        const total = $state.trades.length;
+        const wins = winsCount;
+        const total = totalClosed;
         const m = $state.pnlMetrics || {};
         return {
             count: total,
-            wr: ((wins / total) * 100).toFixed(1),
+            wr: total > 0 ? ((wins / total) * 100).toFixed(1) : "0.0",
             pnl: (m.realizedPnL || 0).toFixed(2),
             pf: (m.profitFactor || 0).toFixed(2),
             sharpe: (m.sharpe || 0).toFixed(2),
             sortino: (m.sortino || 0).toFixed(2),
-            mdd: (m.maxDrawdown || 0).toFixed(1),
+            mdd: (m.maxDrawdown ? m.maxDrawdown * 100 : 0).toFixed(1),
             expectancy: (m.expectancy !== undefined ? m.expectancy : 0).toFixed(2),
             payoff: (m.payoffRatio || 0).toFixed(2),
             calmar: (m.calmar || 0).toFixed(2)
@@ -307,22 +315,22 @@
                     <!-- Global Stats -->
                     <div class="flex justify-between px-3 py-1 bg-blue-950/40 text-blue-300 font-bold">
                         <span>ESTADÍSTICAS</span>
-                        <span>GLOBAL ({cp.totalTrades} OPS)</span>
+                        <span>GLOBAL ({totalClosed > 0 ? totalClosed : cp.totalTrades} OPS)</span>
                     </div>
 
                     <div class="flex justify-between px-3 py-1">
                         <span class="text-slate-400">GANADORAS / PERDEDORAS</span>
-                        <span><span class="text-bull font-bold">{cp.winningTrades}</span> <span class="text-slate-500">/</span> <span class="text-bear font-bold">{cp.losingTrades}</span></span>
+                        <span><span class="text-bull font-bold">{totalClosed > 0 ? winsCount : cp.winningTrades}</span> <span class="text-slate-500">/</span> <span class="text-bear font-bold">{totalClosed > 0 ? lossesCount : cp.losingTrades}</span></span>
                     </div>
 
                     <div class="flex justify-between px-3 py-1">
                         <span class="text-slate-400">TP1 / TP2 / TP3 HITS</span>
-                        <span class="text-slate-200">{cp.tp1Count} / {cp.tp2Count} / {cp.tp3Count}</span>
+                        <span class="text-slate-200">{cp.tp1Count || calcTp1Count} / {cp.tp2Count || calcTp2Count} / {cp.tp3Count || calcTp3Count}</span>
                     </div>
 
                     <div class="flex justify-between px-3 py-1 font-bold">
                         <span class="text-slate-400">WIN RATE GLOBAL</span>
-                        <span class="{cp.winRate >= 50 ? 'text-bull' : 'text-bear'}">{cp.winRate.toFixed(1)}%</span>
+                        <span class="{realWinRate >= 50 ? 'text-bull' : 'text-bear'}">{realWinRate.toFixed(1)}%</span>
                     </div>
 
                     <!-- Capital / PnL -->
