@@ -591,7 +591,47 @@ export function applyOptimizerSelection(modeKey) {
     });
 }
 
-export function replayTrade(trade) {
+export async function replayTrade(trade) {
+    if (!trade) return;
+    
+    // 1. Check if the candles on the chart contain this trade
+    let currentCandles = [];
+    state.update(s => { currentCandles = s.candles || []; return s; });
+
+    const tradeTime = trade.entryTime || trade.signalTime || trade.time;
+    const hasTradeInView = currentCandles.length > 0 && 
+        tradeTime >= currentCandles[0].time && 
+        tradeTime <= currentCandles[currentCandles.length - 1].time;
+
+    if (!hasTradeInView) {
+        // Load the exact historical slice around this trade from full historical database
+        const fullHistory = await getFullHistoricalCandles();
+        if (fullHistory && fullHistory.length > 0) {
+            const idx = fullHistory.findIndex(c => c.time >= tradeTime);
+            if (idx !== -1) {
+                const startIdx = Math.max(0, idx - 120);
+                const endIdx = Math.min(fullHistory.length, idx + 80);
+                const replaySlice = fullHistory.slice(startIdx, endIdx);
+
+                state.update(s => ({
+                    ...s,
+                    liveCandlesBackup: s.liveCandlesBackup || s.candles,
+                    candles: replaySlice,
+                    isReplayMode: true,
+                    selectedTrade: trade
+                }));
+
+                setTimeout(() => {
+                    if (chartReference) {
+                        const replay = prepareReplayData(trade);
+                        zoomRange(chartReference, replay.zoomRange.from, replay.zoomRange.to);
+                    }
+                }, 80);
+                return;
+            }
+        }
+    }
+
     state.update(s => {
         const replay = prepareReplayData(trade);
         if (chartReference) {
@@ -606,10 +646,21 @@ export function replayTrade(trade) {
 }
 
 export function exitReplay() {
-    state.update(s => ({ ...s, isReplayMode: false }));
-    if (chartReference) {
-        chartReference.timeScale().scrollToRealTime();
-    }
+    state.update(s => {
+        const restored = s.liveCandlesBackup || s.candles;
+        return {
+            ...s,
+            isReplayMode: false,
+            selectedTrade: null,
+            candles: restored,
+            liveCandlesBackup: null
+        };
+    });
+    setTimeout(() => {
+        if (chartReference) {
+            chartReference.timeScale().scrollToRealTime();
+        }
+    }, 80);
 }
 
 export function switchMainTab(tab) {

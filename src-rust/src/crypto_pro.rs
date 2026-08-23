@@ -243,10 +243,22 @@ pub fn analyze_crypto_pro(candles: &[Candle], config: &CryptoProConfig) -> Crypt
     let mut active_sr_time: Option<u64> = None;
     let mut active_sr_type: Option<String> = None;
 
+    let mut cooldown_until_bar: usize = 0;
+    let mut current_day_id: u64 = 0;
+    let mut daily_trade_count: usize = 0;
+    let max_trades_per_day: usize = 3;
+    let cooldown_bars: usize = 6;
+
     let start_idx = 50.max(config.pivot_left + config.pivot_right + 1);
 
     for i in start_idx..n {
         let c = &candles[i];
+        let day_id = c.time / 86400;
+        if day_id != current_day_id {
+            current_day_id = day_id;
+            daily_trade_count = 0;
+        }
+
         let curr_atr = atr[i].max(0.01);
         let curr_vol = c.volume.unwrap_or(1.0);
         let curr_avg_vol = avg_vol[i].max(0.01);
@@ -370,6 +382,8 @@ pub fn analyze_crypto_pro(candles: &[Candle], config: &CryptoProConfig) -> Crypt
                 });
                 trade_id_counter += 1;
                 in_active_trade = false;
+                cooldown_until_bar = i + cooldown_bars;
+                retest_state = RetestState::Idle;
             }
         }
 
@@ -408,14 +422,15 @@ pub fn analyze_crypto_pro(candles: &[Candle], config: &CryptoProConfig) -> Crypt
         if near_support { score_long += 10.0; }
         if near_resistance { score_short += 10.0; }
 
-        // Retest State Transition Logic
-        if !in_active_trade {
+        // Retest State Transition Logic with Cooldown and Daily Trade Limit
+        if !in_active_trade && i >= cooldown_until_bar && daily_trade_count < max_trades_per_day {
             match retest_state {
                 RetestState::Idle => {
                     if score_long >= config.minimum_score {
                         if config.wait_for_retest {
                             retest_state = RetestState::ArmedLong { pivot_price: c.close, bar_idx: i, score: score_long };
                         } else {
+                            daily_trade_count += 1;
                             in_active_trade = true;
                             active_trade_side = "LONG";
                             active_entry = c.close;
@@ -487,6 +502,7 @@ pub fn analyze_crypto_pro(candles: &[Candle], config: &CryptoProConfig) -> Crypt
                         if config.wait_for_retest {
                             retest_state = RetestState::ArmedShort { pivot_price: c.close, bar_idx: i, score: score_short };
                         } else {
+                            daily_trade_count += 1;
                             in_active_trade = true;
                             active_trade_side = "SHORT";
                             active_entry = c.close;
@@ -565,6 +581,7 @@ pub fn analyze_crypto_pro(candles: &[Candle], config: &CryptoProConfig) -> Crypt
                         let recovery_confirmed = if config.require_recovery_candle { c.close > c.open && c.close > candles[i - 1].high * 0.998 } else { true };
 
                         if is_pullback && recovery_confirmed {
+                            daily_trade_count += 1;
                             in_active_trade = true;
                             active_trade_side = "LONG";
                             active_entry = c.close;
@@ -644,6 +661,7 @@ pub fn analyze_crypto_pro(candles: &[Candle], config: &CryptoProConfig) -> Crypt
                         let recovery_confirmed = if config.require_recovery_candle { c.close < c.open && c.close < candles[i - 1].low * 1.002 } else { true };
 
                         if is_pullback && recovery_confirmed {
+                            daily_trade_count += 1;
                             in_active_trade = true;
                             active_trade_side = "SHORT";
                             active_entry = c.close;
