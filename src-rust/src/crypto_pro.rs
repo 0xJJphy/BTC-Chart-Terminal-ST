@@ -401,8 +401,10 @@ pub fn analyze_crypto_pro(candles: &[Candle], config: &CryptoProConfig) -> Crypt
         }
 
         // 6. S/R Confluence
-        let near_support = pivots.iter().any(|p| !p.is_high && (c.low - p.price).abs() <= curr_atr);
-        let near_resistance = pivots.iter().any(|p| p.is_high && (c.high - p.price).abs() <= curr_atr);
+        let supp_pivot = pivots.iter().filter(|p| !p.is_high && (c.low - p.price).abs() <= curr_atr * 1.5).last().cloned();
+        let res_pivot = pivots.iter().filter(|p| p.is_high && (c.high - p.price).abs() <= curr_atr * 1.5).last().cloned();
+        let near_support = supp_pivot.is_some();
+        let near_resistance = res_pivot.is_some();
         if near_support { score_long += 10.0; }
         if near_resistance { score_short += 10.0; }
 
@@ -429,6 +431,9 @@ pub fn analyze_crypto_pro(candles: &[Candle], config: &CryptoProConfig) -> Crypt
                             active_entry_time = c.time;
                             active_signal_time = c.time;
                             active_score = score_long;
+                            active_sr_level = supp_pivot.as_ref().map(|p| p.price);
+                            active_sr_time = supp_pivot.as_ref().map(|p| p.time as u64);
+                            active_sr_type = Some("SUPPORT".to_string());
                             active_snapshot = Some(serde_json::json!({
                                 "signal": "LONG",
                                 "strengthLong": score_long,
@@ -497,6 +502,9 @@ pub fn analyze_crypto_pro(candles: &[Candle], config: &CryptoProConfig) -> Crypt
                             active_entry_time = c.time;
                             active_signal_time = c.time;
                             active_score = score_short;
+                            active_sr_level = res_pivot.as_ref().map(|p| p.price);
+                            active_sr_time = res_pivot.as_ref().map(|p| p.time as u64);
+                            active_sr_type = Some("RESISTANCE".to_string());
                             active_snapshot = Some(serde_json::json!({
                                 "signal": "SHORT",
                                 "strengthLong": score_long,
@@ -572,6 +580,9 @@ pub fn analyze_crypto_pro(candles: &[Candle], config: &CryptoProConfig) -> Crypt
                             active_entry_time = c.time;
                             active_signal_time = candles[bar_idx].time;
                             active_score = score;
+                            active_sr_level = supp_pivot.as_ref().map(|p| p.price);
+                            active_sr_time = supp_pivot.as_ref().map(|p| p.time as u64);
+                            active_sr_type = Some("SUPPORT".to_string());
                             active_snapshot = Some(serde_json::json!({
                                 "signal": "LONG",
                                 "strengthLong": score,
@@ -648,6 +659,9 @@ pub fn analyze_crypto_pro(candles: &[Candle], config: &CryptoProConfig) -> Crypt
                             active_entry_time = c.time;
                             active_signal_time = candles[bar_idx].time;
                             active_score = score;
+                            active_sr_level = res_pivot.as_ref().map(|p| p.price);
+                            active_sr_time = res_pivot.as_ref().map(|p| p.time as u64);
+                            active_sr_type = Some("RESISTANCE".to_string());
                             active_snapshot = Some(serde_json::json!({
                                 "signal": "SHORT",
                                 "strengthLong": 0.0,

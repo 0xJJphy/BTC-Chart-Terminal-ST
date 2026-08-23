@@ -194,174 +194,190 @@ export class TradeExecutionRenderer {
             const series = this._data.series;
             const pixelRatio = scope.horizontalPixelRatio;
 
-            const tSignal = t.signalTime || t.time || (t.entryTime ? t.entryTime - 900 : null);
-            const tEntry = t.entryTime || t.time;
-            const tExit = t.exitTime || (tEntry ? tEntry + 3600 * 2 : null);
+            const toSec = (val) => {
+                if (!val) return null;
+                const num = Number(val);
+                if (isNaN(num)) return null;
+                return num > 1e11 ? Math.floor(num / 1000) : Math.floor(num);
+            };
 
-            if (!tEntry) return;
-
-            const xSignal = tSignal ? timeScale.timeToCoordinate(tSignal) : null;
-            const xEntry = timeScale.timeToCoordinate(tEntry);
-            const xExit = tExit ? timeScale.timeToCoordinate(tExit) : scope.mediaSize.width;
+            const tSignal = toSec(t.signalTime || t.time);
+            const tEntry = toSec(t.entryTime || t.time);
+            const tExit = toSec(t.exitTime || (tEntry ? tEntry + 3600 * 4 : null));
 
             const yEntry = series.priceToCoordinate(t.entry);
             const ySL = series.priceToCoordinate(t.sl);
-            const yTP1 = series.priceToCoordinate(t.tp1 || t.tp);
+            const yTP1 = (t.tp1 || t.tp) ? series.priceToCoordinate(t.tp1 || t.tp) : null;
             const yTP2 = t.tp2 ? series.priceToCoordinate(t.tp2) : null;
             const yTP3 = t.tp3 ? series.priceToCoordinate(t.tp3) : null;
 
-            if (yEntry === null || ySL === null) return;
+            if (yEntry === null && ySL === null) return;
+
+            const rawXSignal = tSignal ? timeScale.timeToCoordinate(tSignal) : null;
+            const rawXEntry = tEntry ? timeScale.timeToCoordinate(tEntry) : null;
+            const rawXExit = tExit ? timeScale.timeToCoordinate(tExit) : null;
 
             // 1. S/R Confluence Line (if present for this setup)
             const srLevel = t.srLevel || t.sr_level;
-            const srTime = t.srTime || t.sr_time;
+            const srTime = toSec(t.srTime || t.sr_time);
             const srType = t.srType || t.sr_type || (t.type === 'LONG' ? 'SUPPORT' : 'RESISTANCE');
             if (srLevel !== undefined && srLevel !== null) {
                 const ySR = series.priceToCoordinate(srLevel);
                 if (ySR !== null) {
-                    const xSRStart = srTime ? timeScale.timeToCoordinate(srTime) : (xSignal !== null ? xSignal - 100 : (xEntry !== null ? xEntry - 100 : null));
-                    const xSREnd = xExit !== null ? xExit : scope.mediaSize.width;
+                    const rawXSR = srTime ? timeScale.timeToCoordinate(srTime) : null;
+                    const startSR = Math.max(0, rawXSR !== null ? rawXSR : (rawXSignal !== null ? rawXSignal - 80 : (rawXEntry !== null ? rawXEntry - 80 : 0))) * pixelRatio;
+                    const endSR = Math.min(scope.mediaSize.width, rawXExit !== null ? rawXExit : scope.mediaSize.width) * pixelRatio;
+                    const effYSR = ySR * pixelRatio;
 
-                    if (xSRStart !== null && xSREnd !== null) {
-                        const effSRStartX = Math.max(0, xSRStart) * pixelRatio;
-                        const effSREndX = Math.min(scope.mediaSize.width, xSREnd) * pixelRatio;
-                        const effYSR = ySR * pixelRatio;
-
+                    if (endSR > startSR) {
                         ctx.save();
-                        ctx.setLineDash([6 * pixelRatio, 3 * pixelRatio]);
+                        ctx.setLineDash([6 * pixelRatio, 4 * pixelRatio]);
                         ctx.strokeStyle = srType === 'SUPPORT' ? 'rgba(6, 182, 212, 0.85)' : 'rgba(244, 63, 94, 0.85)';
                         ctx.lineWidth = 1.8 * pixelRatio;
                         ctx.beginPath();
-                        ctx.moveTo(effSRStartX, effYSR);
-                        ctx.lineTo(effSREndX, effYSR);
+                        ctx.moveTo(startSR, effYSR);
+                        ctx.lineTo(endSR, effYSR);
                         ctx.stroke();
 
                         // Label
                         ctx.fillStyle = srType === 'SUPPORT' ? '#06b6d4' : '#f43f5e';
                         ctx.font = `bold ${Math.round(9 * pixelRatio)}px "JetBrains Mono", monospace`;
-                        ctx.fillText(`${srType} CONFLUENCE: $${srLevel.toFixed(1)}`, effSRStartX + 6 * pixelRatio, effYSR - 4 * pixelRatio);
+                        ctx.fillText(`${srType} CONFLUENCE: $${srLevel.toFixed(1)}`, startSR + 6 * pixelRatio, effYSR - 4 * pixelRatio);
                         ctx.restore();
                     }
                 }
             }
 
             // 2. Order Pending / Retest Phase (from signal to entry)
-            if (xSignal !== null && xEntry !== null && xEntry > xSignal) {
-                const effXSig = Math.max(0, xSignal) * pixelRatio;
-                const effXEnt = Math.min(scope.mediaSize.width, xEntry) * pixelRatio;
-                const effYEnt = yEntry * pixelRatio;
+            if (rawXSignal !== null && rawXEntry !== null && rawXEntry > rawXSignal) {
+                const effXSig = Math.max(0, rawXSignal) * pixelRatio;
+                const effXEnt = Math.min(scope.mediaSize.width, rawXEntry) * pixelRatio;
+                const effYEnt = (yEntry !== null ? yEntry : 0) * pixelRatio;
 
-                ctx.save();
-                ctx.setLineDash([4 * pixelRatio, 4 * pixelRatio]);
-                ctx.strokeStyle = '#eab308';
-                ctx.lineWidth = 1.5 * pixelRatio;
-                ctx.beginPath();
-                ctx.moveTo(effXSig, effYEnt);
-                ctx.lineTo(effXEnt, effYEnt);
-                ctx.stroke();
+                if (effXEnt > effXSig) {
+                    ctx.save();
+                    ctx.setLineDash([4 * pixelRatio, 4 * pixelRatio]);
+                    ctx.strokeStyle = '#eab308';
+                    ctx.lineWidth = 1.5 * pixelRatio;
+                    ctx.beginPath();
+                    ctx.moveTo(effXSig, effYEnt);
+                    ctx.lineTo(effXEnt, effYEnt);
+                    ctx.stroke();
 
-                // Fill light yellow area indicating pending order / retest zone
-                ctx.fillStyle = 'rgba(234, 179, 8, 0.08)';
-                const topY = Math.min(yEntry, ySL) * pixelRatio;
-                const botY = Math.max(yEntry, ySL) * pixelRatio;
-                ctx.fillRect(effXSig, topY, effXEnt - effXSig, botY - topY);
+                    // Fill light yellow area
+                    if (ySL !== null) {
+                        ctx.fillStyle = 'rgba(234, 179, 8, 0.08)';
+                        const topY = Math.min(yEntry, ySL) * pixelRatio;
+                        const botY = Math.max(yEntry, ySL) * pixelRatio;
+                        ctx.fillRect(effXSig, topY, effXEnt - effXSig, botY - topY);
+                    }
 
-                ctx.fillStyle = '#eab308';
-                ctx.font = `bold ${Math.round(8.5 * pixelRatio)}px "JetBrains Mono", monospace`;
-                ctx.fillText(`ORDER PENDING RETEST`, effXSig + 4 * pixelRatio, effYEnt - 4 * pixelRatio);
-                ctx.restore();
+                    ctx.fillStyle = '#eab308';
+                    ctx.font = `bold ${Math.round(8.5 * pixelRatio)}px "JetBrains Mono", monospace`;
+                    ctx.fillText(`ORDER PENDING RETEST`, effXSig + 4 * pixelRatio, effYEnt - 4 * pixelRatio);
+                    ctx.restore();
+                }
             }
 
             // 3. Active Trade Execution Phase (from entry to exit)
-            if (xEntry !== null && xExit !== null) {
-                const startX = Math.max(0, xEntry) * pixelRatio;
-                const endX = Math.min(scope.mediaSize.width, xExit) * pixelRatio;
-                const w = endX - startX;
+            const effX1 = rawXEntry !== null ? rawXEntry : 0;
+            const effX2 = rawXExit !== null ? rawXExit : scope.mediaSize.width;
 
-                if (w > 0) {
-                    const effYEnt = yEntry * pixelRatio;
-                    const effYSL = ySL * pixelRatio;
-                    const effYTP = yTP1 !== null ? yTP1 * pixelRatio : effYEnt;
+            const startX = Math.max(0, effX1) * pixelRatio;
+            const endX = Math.min(scope.mediaSize.width, effX2) * pixelRatio;
+            const w = endX - startX;
 
-                    // Green Profit Area
+            if (w > 0 && yEntry !== null) {
+                const effYEnt = yEntry * pixelRatio;
+                const effYSL = ySL !== null ? ySL * pixelRatio : effYEnt;
+                const effYTP = yTP1 !== null ? yTP1 * pixelRatio : effYEnt;
+
+                // Green Profit Area
+                if (yTP1 !== null) {
                     ctx.fillStyle = 'rgba(8, 153, 129, 0.14)';
                     const topP = Math.min(effYEnt, effYTP);
                     const botP = Math.max(effYEnt, effYTP);
                     ctx.fillRect(startX, topP, w, botP - topP);
+                }
 
-                    // Red Risk Area
+                // Red Risk Area
+                if (ySL !== null) {
                     ctx.fillStyle = 'rgba(242, 54, 69, 0.14)';
                     const topR = Math.min(effYEnt, effYSL);
                     const botR = Math.max(effYEnt, effYSL);
                     ctx.fillRect(startX, topR, w, botR - topR);
+                }
 
-                    // Solid bounded Entry Line
-                    ctx.strokeStyle = '#2962ff';
-                    ctx.lineWidth = 2 * pixelRatio;
-                    ctx.beginPath();
-                    ctx.moveTo(startX, effYEnt);
-                    ctx.lineTo(endX, effYEnt);
-                    ctx.stroke();
+                // Solid bounded Entry Line (Blue)
+                ctx.strokeStyle = '#2962ff';
+                ctx.lineWidth = 2.2 * pixelRatio;
+                ctx.beginPath();
+                ctx.moveTo(startX, effYEnt);
+                ctx.lineTo(endX, effYEnt);
+                ctx.stroke();
 
-                    // Solid bounded SL Line
+                // Solid bounded SL Line (Red)
+                if (ySL !== null) {
                     ctx.strokeStyle = '#f23645';
-                    ctx.lineWidth = 2 * pixelRatio;
+                    ctx.lineWidth = 2.2 * pixelRatio;
                     ctx.beginPath();
                     ctx.moveTo(startX, effYSL);
                     ctx.lineTo(endX, effYSL);
                     ctx.stroke();
+                }
 
-                    // Solid bounded TP1 Line
-                    if (yTP1 !== null) {
-                        ctx.strokeStyle = '#089981';
-                        ctx.lineWidth = 2 * pixelRatio;
-                        ctx.beginPath();
-                        ctx.moveTo(startX, effYTP);
-                        ctx.lineTo(endX, effYTP);
-                        ctx.stroke();
-                    }
+                // Solid bounded TP1 Line (Green)
+                if (yTP1 !== null) {
+                    ctx.strokeStyle = '#089981';
+                    ctx.lineWidth = 2.2 * pixelRatio;
+                    ctx.beginPath();
+                    ctx.moveTo(startX, effYTP);
+                    ctx.lineTo(endX, effYTP);
+                    ctx.stroke();
+                }
 
-                    // TP2 Line
-                    if (yTP2 !== null) {
-                        ctx.strokeStyle = '#10b981';
-                        ctx.lineWidth = 1.5 * pixelRatio;
-                        ctx.beginPath();
-                        ctx.moveTo(startX, yTP2 * pixelRatio);
-                        ctx.lineTo(endX, yTP2 * pixelRatio);
-                        ctx.stroke();
-                    }
+                // TP2 Line
+                if (yTP2 !== null) {
+                    ctx.strokeStyle = '#10b981';
+                    ctx.lineWidth = 1.6 * pixelRatio;
+                    ctx.beginPath();
+                    ctx.moveTo(startX, yTP2 * pixelRatio);
+                    ctx.lineTo(endX, yTP2 * pixelRatio);
+                    ctx.stroke();
+                }
 
-                    // TP3 Line
-                    if (yTP3 !== null) {
-                        ctx.strokeStyle = '#34d399';
-                        ctx.lineWidth = 1.5 * pixelRatio;
-                        ctx.beginPath();
-                        ctx.moveTo(startX, yTP3 * pixelRatio);
-                        ctx.lineTo(endX, yTP3 * pixelRatio);
-                        ctx.stroke();
-                    }
+                // TP3 Line
+                if (yTP3 !== null) {
+                    ctx.strokeStyle = '#34d399';
+                    ctx.lineWidth = 1.6 * pixelRatio;
+                    ctx.beginPath();
+                    ctx.moveTo(startX, yTP3 * pixelRatio);
+                    ctx.lineTo(endX, yTP3 * pixelRatio);
+                    ctx.stroke();
+                }
 
-                    // Bounded Text Labels on the Right
-                    ctx.font = `bold ${Math.round(8.5 * pixelRatio)}px "JetBrains Mono", monospace`;
-                    
-                    ctx.fillStyle = '#60a5fa';
-                    ctx.fillText(`ENTRY $${t.entry?.toFixed(1)}`, endX + 4 * pixelRatio, effYEnt + 3 * pixelRatio);
+                // Crisp Price Badge Labels on the Right
+                ctx.font = `bold ${Math.round(9 * pixelRatio)}px "JetBrains Mono", monospace`;
+                
+                ctx.fillStyle = '#60a5fa';
+                ctx.fillText(`ENTRY $${t.entry?.toFixed(1)}`, endX + 4 * pixelRatio, effYEnt + 3 * pixelRatio);
 
+                if (ySL !== null) {
                     ctx.fillStyle = '#f87171';
                     ctx.fillText(`SL $${t.sl?.toFixed(1)}`, endX + 4 * pixelRatio, effYSL + 3 * pixelRatio);
+                }
 
-                    if (yTP1 !== null) {
-                        ctx.fillStyle = '#34d399';
-                        ctx.fillText(`TP1 $${(t.tp1 || t.tp)?.toFixed(1)}`, endX + 4 * pixelRatio, effYTP + 3 * pixelRatio);
-                    }
-                    if (yTP2 !== null && t.tp2) {
-                        ctx.fillStyle = '#10b981';
-                        ctx.fillText(`TP2 $${t.tp2.toFixed(1)}`, endX + 4 * pixelRatio, yTP2 * pixelRatio + 3 * pixelRatio);
-                    }
-                    if (yTP3 !== null && t.tp3) {
-                        ctx.fillStyle = '#059669';
-                        ctx.fillText(`TP3 $${t.tp3.toFixed(1)}`, endX + 4 * pixelRatio, yTP3 * pixelRatio + 3 * pixelRatio);
-                    }
+                if (yTP1 !== null) {
+                    ctx.fillStyle = '#34d399';
+                    ctx.fillText(`TP1 $${(t.tp1 || t.tp)?.toFixed(1)}`, endX + 4 * pixelRatio, effYTP + 3 * pixelRatio);
+                }
+                if (yTP2 !== null && t.tp2) {
+                    ctx.fillStyle = '#10b981';
+                    ctx.fillText(`TP2 $${t.tp2.toFixed(1)}`, endX + 4 * pixelRatio, yTP2 * pixelRatio + 3 * pixelRatio);
+                }
+                if (yTP3 !== null && t.tp3) {
+                    ctx.fillStyle = '#059669';
+                    ctx.fillText(`TP3 $${t.tp3.toFixed(1)}`, endX + 4 * pixelRatio, yTP3 * pixelRatio + 3 * pixelRatio);
                 }
             }
         });

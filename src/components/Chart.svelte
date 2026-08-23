@@ -454,46 +454,41 @@
             }
 
             // Visual primitives
-            if (s.activeMode === "zones") {
-                boxPrimitive.setData(s.zones || []);
-                trendPrimitive.setData([]);
-                regPrimitive.setData(null);
-            } else if (s.activeMode === "lines") {
-                boxPrimitive.setData([]);
-                const visibleLines = s.showBrokenLines
-                    ? s.lines || []
-                    : (s.lines || []).filter((l) => l.status === "ACTIVE");
-                trendPrimitive.setData(visibleLines);
-                regPrimitive.setData(null);
-            } else if (s.activeMode === "reglin") {
-                boxPrimitive.setData([]);
-                trendPrimitive.setData([]);
-                regPrimitive.setData(s.channel);
-            } else if (
-                s.activeMode === "strat" ||
-                s.activeMode === "trades" ||
-                s.activeMode === "pnl" ||
-                s.activeMode === "orderflow"
-            ) {
-                if (s.isReplayMode && s.selectedTrade) {
-                    const t = s.selectedTrade;
-                    const boxes = [];
-                    if (t.savedOB) boxes.push(t.savedOB);
-                    if (t.savedFVG) boxes.push(t.savedFVG);
-                    boxPrimitive.setData(boxes);
+            if (s.isReplayMode && s.selectedTrade) {
+                const t = s.selectedTrade;
+                const boxes = [];
+                if (t.savedOB) boxes.push(t.savedOB);
+                if (t.savedFVG) boxes.push(t.savedFVG);
+                boxPrimitive.setData(boxes);
 
-                    if (t.savedLine) {
-                        trendPrimitive.setData([t.savedLine]);
-                    } else {
-                        trendPrimitive.setData([]);
-                    }
+                if (t.savedLine) {
+                    trendPrimitive.setData([t.savedLine]);
+                } else {
+                    trendPrimitive.setData([]);
+                }
+                regPrimitive.setData(null);
+                tradeExecPrimitive.setData(t);
+            } else {
+                tradeExecPrimitive.setData(null);
+                if (s.activeMode === "zones") {
+                    boxPrimitive.setData(s.zones || []);
+                    trendPrimitive.setData([]);
                     regPrimitive.setData(null);
-                    tradeExecPrimitive.setData(t);
+                } else if (s.activeMode === "lines") {
+                    boxPrimitive.setData([]);
+                    const visibleLines = s.showBrokenLines
+                        ? s.lines || []
+                        : (s.lines || []).filter((l) => l.status === "ACTIVE");
+                    trendPrimitive.setData(visibleLines);
+                    regPrimitive.setData(null);
+                } else if (s.activeMode === "reglin") {
+                    boxPrimitive.setData([]);
+                    trendPrimitive.setData([]);
+                    regPrimitive.setData(s.channel);
                 } else {
                     boxPrimitive.setData([]);
                     trendPrimitive.setData([]);
                     regPrimitive.setData(null);
-                    tradeExecPrimitive.setData(null);
                 }
             }
 
