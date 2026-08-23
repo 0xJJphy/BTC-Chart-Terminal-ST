@@ -1,4 +1,4 @@
-﻿<script>
+<script>
     import { onMount, onDestroy } from "svelte";
     import { createChart, CrosshairMode } from "lightweight-charts";
     import { state, APP } from "../lib/stores/app.js";
@@ -17,7 +17,7 @@
     let candleSeries;
     let volumeSeries;
     let deltaSeries;
-    let entryLine, tpLine, slLine;
+    let entryLine, tpLine, tp1Line, tp2Line, tp3Line, slLine, beLine;
 
     // Sub-pane series
     let subCvdSeries, subSmaSeries, subUpperBand, subLowerBand;
@@ -27,18 +27,14 @@
     let activeSubPane = "CVD"; // "CVD", "RSI", "MACD", "VOL"
 
     function clearPriceLines() {
-        if (entryLine && candleSeries) {
-            candleSeries.removePriceLine(entryLine);
-            entryLine = null;
-        }
-        if (tpLine && candleSeries) {
-            candleSeries.removePriceLine(tpLine);
-            tpLine = null;
-        }
-        if (slLine && candleSeries) {
-            candleSeries.removePriceLine(slLine);
-            slLine = null;
-        }
+        if (!candleSeries) return;
+        if (entryLine) { candleSeries.removePriceLine(entryLine); entryLine = null; }
+        if (tpLine) { candleSeries.removePriceLine(tpLine); tpLine = null; }
+        if (tp1Line) { candleSeries.removePriceLine(tp1Line); tp1Line = null; }
+        if (tp2Line) { candleSeries.removePriceLine(tp2Line); tp2Line = null; }
+        if (tp3Line) { candleSeries.removePriceLine(tp3Line); tp3Line = null; }
+        if (slLine) { candleSeries.removePriceLine(slLine); slLine = null; }
+        if (beLine) { candleSeries.removePriceLine(beLine); beLine = null; }
     }
 
     function updatePriceLines(trade) {
@@ -54,15 +50,6 @@
             title: "ENTRY",
         });
 
-        tpLine = candleSeries.createPriceLine({
-            price: trade.tp,
-            color: "#089981",
-            lineWidth: 2,
-            lineStyle: 0,
-            axisLabelVisible: true,
-            title: "TP",
-        });
-
         slLine = candleSeries.createPriceLine({
             price: trade.sl,
             color: "#f23645",
@@ -71,6 +58,50 @@
             axisLabelVisible: true,
             title: "SL",
         });
+
+        if (trade.tp1 || trade.tp) {
+            tp1Line = candleSeries.createPriceLine({
+                price: trade.tp1 || trade.tp,
+                color: "#089981",
+                lineWidth: 2,
+                lineStyle: 0,
+                axisLabelVisible: true,
+                title: trade.tp2 ? "TP1 (50%)" : "TP",
+            });
+        }
+
+        if (trade.tp2) {
+            tp2Line = candleSeries.createPriceLine({
+                price: trade.tp2,
+                color: "#10b981",
+                lineWidth: 2,
+                lineStyle: 2,
+                axisLabelVisible: true,
+                title: "TP2 (25%)",
+            });
+        }
+
+        if (trade.tp3) {
+            tp3Line = candleSeries.createPriceLine({
+                price: trade.tp3,
+                color: "#34d399",
+                lineWidth: 2,
+                lineStyle: 2,
+                axisLabelVisible: true,
+                title: "TP3 (25%)",
+            });
+        }
+
+        if (trade.status === 'WIN' && trade.tp1) {
+            beLine = candleSeries.createPriceLine({
+                price: trade.entry,
+                color: "#eab308",
+                lineWidth: 1,
+                lineStyle: 1,
+                axisLabelVisible: true,
+                title: "BE (TRAIL)",
+            });
+        }
     }
 
     let boxPrimitive = new BoxPrimitive();
@@ -505,22 +536,57 @@
 
     <!-- Main Candlestick Chart (Flexible Height) -->
     <div bind:this={chartContainer} class="flex-1 w-full min-h-0 relative">
-        {#if $state.isReplayMode}
+        {#if $state.isReplayMode && $state.selectedTrade}
+            {@const t = $state.selectedTrade}
             <div
-                class="absolute top-4 left-1/2 -translate-x-1/2 bg-accent/90 backdrop-blur px-4 py-2 rounded-full border border-white/20 shadow-2xl flex items-center space-x-3 group cursor-pointer z-50"
+                class="absolute top-3 left-1/2 -translate-x-1/2 bg-black/85 backdrop-blur-md px-4 py-2 rounded-xl border border-accent/50 shadow-2xl flex items-center gap-4 z-50 text-[9.5px] font-mono"
             >
-                <div class="flex items-center space-x-2">
-                    <span class="w-2 h-2 rounded-full bg-white animate-pulse"></span>
-                    <span class="text-[10px] font-bold text-white uppercase tracking-wider">
-                        Historical Replay Mode
+                <div class="flex items-center gap-2">
+                    <span class="w-2.5 h-2.5 rounded-full {t.status === 'WIN' ? 'bg-bull' : 'bg-bear'} animate-pulse"></span>
+                    <span class="font-bold {t.type === 'LONG' ? 'text-bull' : 'text-bear'} text-[10px] uppercase">
+                        {t.type} {t.outcome || t.status}
+                    </span>
+                    <span class="text-slate-400">
+                        ({t.pnl >= 0 ? '+' : ''}{t.pnl?.toFixed(2)}R)
                     </span>
                 </div>
-                <div class="h-3 w-[1px] bg-white/30"></div>
+
+                <div class="h-4 w-[1px] bg-border/60"></div>
+
+                <!-- Price Levels -->
+                <div class="flex items-center gap-2.5 text-slate-300">
+                    <span>Entry: <strong class="text-white">${t.entry?.toFixed(2)}</strong></span>
+                    <span>SL: <strong class="text-bear">${t.sl?.toFixed(2)}</strong></span>
+                    <span>
+                        {#if t.tp1}
+                            TP1: <strong class="text-bull">${t.tp1?.toFixed(2)}</strong>
+                            {#if t.tp2} | TP2: <strong class="text-bull">${t.tp2?.toFixed(2)}</strong>{/if}
+                            {#if t.tp3} | TP3: <strong class="text-bull">${t.tp3?.toFixed(2)}</strong>{/if}
+                        {:else}
+                            TP: <strong class="text-bull">${t.tp?.toFixed(2)}</strong>
+                        {/if}
+                    </span>
+                </div>
+
+                <div class="h-4 w-[1px] bg-border/60"></div>
+
+                <!-- Indicator Confluence -->
+                <div class="flex items-center gap-2 text-slate-400">
+                    <span class="bg-blue-900/50 text-blue-300 px-1.5 py-0.5 rounded text-[8.5px] font-bold">
+                        Score: {t.setupScore?.toFixed(0) || t.score || 70}
+                    </span>
+                    {#if t.desc}
+                        <span class="text-slate-300 font-sans text-[9px] max-w-[200px] truncate" title={t.desc}>
+                            {t.desc}
+                        </span>
+                    {/if}
+                </div>
+
                 <button
                     on:click={() => state.update((s) => ({ ...s, isReplayMode: false }))}
-                    class="text-[9px] text-white/80 font-bold uppercase hover:text-white"
+                    class="bg-white/10 hover:bg-white/20 text-white px-2 py-1 rounded text-[8.5px] font-bold uppercase transition-colors"
                 >
-                    Exit View
+                    Exit
                 </button>
             </div>
         {/if}
