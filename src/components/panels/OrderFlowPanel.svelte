@@ -58,6 +58,111 @@
         { id: 'quarterly', label: '1Q (Quarter)' },
         { id: 'yearly', label: '1Y (Yearly)' }
     ];
+
+    // Market Sessions analysis computed on $state.candles
+    $: sessionsData = computeMarketSessions($state.candles);
+
+    function computeMarketSessions(candles) {
+        if (!candles || candles.length === 0) return null;
+        
+        const currentUtcHour = new Date().getUTCHours();
+        let currentSession = 'ASIA';
+        if (currentUtcHour >= 8 && currentUtcHour < 13) currentSession = 'LONDON';
+        else if (currentUtcHour >= 13 && currentUtcHour < 21) currentSession = 'NEW_YORK';
+        else currentSession = 'ASIA';
+
+        // Filter to recent candles (e.g. last 24h or current day)
+        const recentCandles = candles.slice(-200);
+        
+        const sessions = {
+            asia: { name: 'Asia / Tokyo', time: '00:00 - 08:00 UTC', vol: 0, delta: 0, high: -Infinity, low: Infinity, count: 0, icon: 'fa-globe-asia', color: 'text-indigo-400' },
+            london: { name: 'London', time: '08:00 - 14:00 UTC', vol: 0, delta: 0, high: -Infinity, low: Infinity, count: 0, icon: 'fa-landmark', color: 'text-amber-400' },
+            ny: { name: 'New York', time: '13:00 - 21:00 UTC', vol: 0, delta: 0, high: -Infinity, low: Infinity, count: 0, icon: 'fa-city', color: 'text-emerald-400' }
+        };
+
+        for (const c of recentCandles) {
+            const h = new Date(c.time * 1000).getUTCHours();
+            const vol = c.volume || 1;
+            const delta = c.delta !== undefined && c.delta !== null 
+                ? c.delta 
+                : ((c.buyVolume !== undefined && c.sellVolume !== undefined) 
+                    ? (c.buyVolume - c.sellVolume) 
+                    : (c.close >= c.open ? vol * 0.25 : -vol * 0.25));
+
+            if (h >= 0 && h < 8) {
+                sessions.asia.vol += vol;
+                sessions.asia.delta += delta;
+                sessions.asia.high = Math.max(sessions.asia.high, c.high);
+                sessions.asia.low = Math.min(sessions.asia.low, c.low);
+                sessions.asia.count++;
+            }
+            if (h >= 8 && h < 14) {
+                sessions.london.vol += vol;
+                sessions.london.delta += delta;
+                sessions.london.high = Math.max(sessions.london.high, c.high);
+                sessions.london.low = Math.min(sessions.london.low, c.low);
+                sessions.london.count++;
+            }
+            if (h >= 13 && h < 21) {
+                sessions.ny.vol += vol;
+                sessions.ny.delta += delta;
+                sessions.ny.high = Math.max(sessions.ny.high, c.high);
+                sessions.ny.low = Math.min(sessions.ny.low, c.low);
+                sessions.ny.count++;
+            }
+        }
+
+        const totalVol = Math.max(1, sessions.asia.vol + sessions.london.vol + sessions.ny.vol);
+
+        return {
+            currentSession,
+            currentUtcHour,
+            sessions: [
+                {
+                    key: 'ASIA',
+                    name: 'Asia / Tokyo',
+                    time: '00:00 - 08:00 UTC',
+                    active: currentSession === 'ASIA',
+                    vol: sessions.asia.vol,
+                    volPct: ((sessions.asia.vol / totalVol) * 100).toFixed(1),
+                    delta: sessions.asia.delta,
+                    range: sessions.asia.high > sessions.asia.low ? (sessions.asia.high - sessions.asia.low).toFixed(1) : '---',
+                    icon: 'fa-globe-asia',
+                    color: 'text-indigo-400',
+                    border: 'border-indigo-500/30',
+                    badge: 'Rango / Absorción'
+                },
+                {
+                    key: 'LONDON',
+                    name: 'London',
+                    time: '08:00 - 14:00 UTC',
+                    active: currentSession === 'LONDON',
+                    vol: sessions.london.vol,
+                    volPct: ((sessions.london.vol / totalVol) * 100).toFixed(1),
+                    delta: sessions.london.delta,
+                    range: sessions.london.high > sessions.london.low ? (sessions.london.high - sessions.london.low).toFixed(1) : '---',
+                    icon: 'fa-landmark',
+                    color: 'text-amber-400',
+                    border: 'border-amber-500/30',
+                    badge: 'Expansión / Sweep'
+                },
+                {
+                    key: 'NEW_YORK',
+                    name: 'New York',
+                    time: '13:00 - 21:00 UTC',
+                    active: currentSession === 'NEW_YORK',
+                    vol: sessions.ny.vol,
+                    volPct: ((sessions.ny.vol / totalVol) * 100).toFixed(1),
+                    delta: sessions.ny.delta,
+                    range: sessions.ny.high > sessions.ny.low ? (sessions.ny.high - sessions.ny.low).toFixed(1) : '---',
+                    icon: 'fa-city',
+                    color: 'text-emerald-400',
+                    border: 'border-emerald-500/30',
+                    badge: 'Pico Vol / ETFs'
+                }
+            ]
+        };
+    }
 </script>
 
 <div class="flex-1 flex flex-col overflow-hidden bg-panel">
@@ -169,6 +274,58 @@
                 <div class="text-[8px] text-slate-500">{cvd && Math.abs(cvd.currentZScore) > 2.0 ? 'Statistical Extreme' : 'In 2σ Bands'}</div>
             </div>
         </div>
+
+        <!-- Market Sessions Comparison Analysis (Asia vs London vs New York) -->
+        {#if sessionsData}
+            <div class="bg-black/20 p-3.5 rounded-xl border border-border/40 space-y-3">
+                <div class="flex justify-between items-center">
+                    <div class="flex items-center space-x-2">
+                        <i class="fas fa-earth-americas text-accent text-[10px]"></i>
+                        <span class="text-[9px] font-bold text-slate-300 uppercase tracking-widest">
+                            Market Sessions Flow
+                        </span>
+                    </div>
+                    <div class="flex items-center space-x-1.5 text-[8.5px] font-mono text-slate-400">
+                        <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping"></span>
+                        <span class="text-white font-bold">{sessionsData.currentSession}</span>
+                    </div>
+                </div>
+
+                <!-- Session Cards -->
+                <div class="grid grid-cols-1 gap-2">
+                    {#each sessionsData.sessions as s}
+                        <div class="p-2.5 rounded-lg border {s.active ? 'bg-accent/10 border-accent/60 shadow-md' : 'bg-panel/40 border-border/25'} space-y-1.5 transition-all">
+                            <div class="flex justify-between items-center">
+                                <div class="flex items-center space-x-2">
+                                    <i class="fas {s.icon} text-xs {s.color}"></i>
+                                    <span class="text-[9.5px] font-bold text-white uppercase">{s.name}</span>
+                                    <span class="text-[8px] font-mono text-slate-500">{s.time}</span>
+                                </div>
+                                <span class="text-[8px] font-bold px-1.5 py-0.5 rounded {s.active ? 'bg-accent text-white' : 'bg-slate-800 text-slate-400'}">
+                                    {s.badge}
+                                </span>
+                            </div>
+
+                            <!-- Session Metrics -->
+                            <div class="grid grid-cols-3 gap-2 pt-1 text-[9px] font-mono border-t border-border/20">
+                                <div>
+                                    <span class="text-[7.5px] text-slate-500 uppercase block">Volume</span>
+                                    <span class="text-white font-bold">{(s.vol).toFixed(0)} <span class="text-[7.5px] text-slate-400">({s.volPct}%)</span></span>
+                                </div>
+                                <div>
+                                    <span class="text-[7.5px] text-slate-500 uppercase block">Delta</span>
+                                    <span class="font-bold {s.delta >= 0 ? 'text-bull' : 'text-bear'}">{s.delta >= 0 ? '+' : ''}{(s.delta).toFixed(1)}</span>
+                                </div>
+                                <div>
+                                    <span class="text-[7.5px] text-slate-500 uppercase block">Range</span>
+                                    <span class="text-slate-300 font-bold">${s.range}</span>
+                                </div>
+                            </div>
+                        </div>
+                    {/each}
+                </div>
+            </div>
+        {/if}
 
         <!-- Order Book Depth & Imbalance Meter -->
         <div class="bg-black/20 p-3 rounded-xl border border-border/40 space-y-3">
