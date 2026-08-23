@@ -379,3 +379,168 @@ export function calculateDMI_ADX(candles, period = 14) {
 
     return { adx, diPlus, diMinus };
 }
+
+/**
+ * Calculates continuous Anchored CVD and Rolling Z-Score Time Series
+ */
+export function calculateAnchoredCVD(candles, anchorPeriod = 'daily', smaPeriod = 20) {
+    if (!candles || candles.length === 0) return { cvd: [], sma: [], upper: [], lower: [], zScore: [] };
+    const n = candles.length;
+    let runningCvd = 0;
+    const cvdValues = [];
+    let prevTime = 0;
+
+    const cvdRes = [];
+    const smaRes = [];
+    const upperRes = [];
+    const lowerRes = [];
+    const zScoreRes = [];
+
+    const getReset = (curr, prev) => {
+        if (!prev) return false;
+        if (anchorPeriod === 'daily') return Math.floor(curr / 86400) !== Math.floor(prev / 86400);
+        if (anchorPeriod === 'weekly') return Math.floor((curr + 345600) / 604800) !== Math.floor((prev + 345600) / 604800);
+        if (anchorPeriod === 'monthly') return Math.floor(curr / 2629743) !== Math.floor(prev / 2629743);
+        return false;
+    };
+
+    for (let i = 0; i < n; i++) {
+        const c = candles[i];
+        if (getReset(c.time, prevTime)) {
+            runningCvd = 0;
+        }
+
+        const vol = c.volume || 1;
+        const delta = c.delta !== undefined && c.delta !== null 
+            ? c.delta 
+            : ((c.buyVolume !== undefined && c.sellVolume !== undefined) 
+                ? (c.buyVolume - c.sellVolume) 
+                : (c.close >= c.open ? vol * 0.25 : -vol * 0.25));
+
+        runningCvd += delta;
+        cvdValues.push(runningCvd);
+
+        const wStart = Math.max(0, cvdValues.length - smaPeriod);
+        const window = cvdValues.slice(wStart);
+        const mean = window.reduce((a, b) => a + b, 0) / window.length;
+        const variance = window.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / window.length;
+        const stdDev = Math.max(0.001, Math.sqrt(variance));
+
+        const z = (runningCvd - mean) / stdDev;
+        const up = mean + 2 * stdDev;
+        const low = mean - 2 * stdDev;
+
+        cvdRes.push({ time: c.time, value: runningCvd });
+        smaRes.push({ time: c.time, value: mean });
+        upperRes.push({ time: c.time, value: up });
+        lowerRes.push({ time: c.time, value: low });
+        zScoreRes.push({
+            time: c.time,
+            value: z,
+            color: z >= 2.0 ? '#10b981' : (z <= -2.0 ? '#f43f5e' : (z >= 0 ? '#38bdf8' : '#fb923c'))
+        });
+
+        prevTime = c.time;
+    }
+
+    return { cvd: cvdRes, sma: smaRes, upper: upperRes, lower: lowerRes, zScore: zScoreRes };
+}
+
+/**
+ * Calculates Delta Efficiency Ratio (DER = Price Displacement / Cum Delta)
+ */
+export function calculateDER(candles, period = 14) {
+    if (!candles || candles.length < period) return [];
+    const res = [];
+
+    for (let i = period; i < candles.length; i++) {
+        const pDist = Math.abs(candles[i].close - candles[i - period].close);
+        let cumDelta = 0;
+
+        for (let k = i - period + 1; k <= i; k++) {
+            const c = candles[k];
+            const vol = c.volume || 1;
+            const delta = c.delta !== undefined && c.delta !== null 
+                ? Math.abs(c.delta) 
+                : ((c.buyVolume !== undefined && c.sellVolume !== undefined) 
+                    ? Math.abs(c.buyVolume - c.sellVolume) 
+                    : vol * 0.25);
+            cumDelta += delta;
+        }
+
+        const der = pDist / Math.max(0.001, cumDelta);
+        res.push({
+            time: candles[i].time,
+            value: der,
+            color: der >= 5.0 ? '#10b981' : (der <= 1.0 ? '#f43f5e' : '#38bdf8')
+        });
+    }
+
+    return res;
+}
+
+/**
+ * Calculates Liquidity Fragility Index (Psi = Price Return / Relative Volume)
+ */
+export function calculateFragility(candles, period = 20) {
+    if (!candles || candles.length < period) return [];
+    const res = [];
+
+    // Calculate moving average volume
+    let sumVol = 0;
+    for (let i = 0; i < candles.length; i++) {
+        sumVol += (candles[i].volume || 1);
+        if (i >= period) {
+            sumVol -= (candles[i - period].volume || 1);
+            const avgVol = Math.max(0.001, sumVol / period);
+            const c = candles[i];
+            const returnPct = Math.abs((c.high - c.low) / Math.max(1, c.close)) * 1000;
+            const relVol = Math.max(0.01, (c.volume || 1) / avgVol);
+            const fragility = (returnPct / relVol);
+
+            res.push({
+                time: c.time,
+                value: fragility,
+                color: fragility >= 100 ? '#f43f5e' : (fragility >= 50 ? '#fb923c' : '#38bdf8')
+            });
+        }
+    }
+
+    return res;
+}
+
+/**
+ * Calculates Volume & Delta time series
+ */
+export function calculateVolumeDelta(candles, smaPeriod = 20) {
+    if (!candles || candles.length === 0) return { delta: [], sma: [] };
+    const deltaRes = [];
+    const smaRes = [];
+    let sumVol = 0;
+
+    for (let i = 0; i < candles.length; i++) {
+        const c = candles[i];
+        const vol = c.volume || 1;
+        const d = c.delta !== undefined && c.delta !== null 
+            ? c.delta 
+            : ((c.buyVolume !== undefined && c.sellVolume !== undefined) 
+                ? (c.buyVolume - c.sellVolume) 
+                : (c.close >= c.open ? vol * 0.25 : -vol * 0.25));
+
+        deltaRes.push({
+            time: c.time,
+            value: d,
+            color: d >= 0 ? 'rgba(34, 197, 94, 0.8)' : 'rgba(239, 68, 68, 0.8)'
+        });
+
+        sumVol += vol;
+        if (i >= smaPeriod) {
+            sumVol -= (candles[i - smaPeriod].volume || 1);
+            smaRes.push({ time: c.time, value: sumVol / smaPeriod });
+        } else {
+            smaRes.push({ time: c.time, value: sumVol / (i + 1) });
+        }
+    }
+
+    return { delta: deltaRes, sma: smaRes };
+}

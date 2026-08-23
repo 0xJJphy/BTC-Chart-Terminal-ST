@@ -9,8 +9,15 @@
         LinearRegressionPrimitive,
         TradeExecutionPrimitive,
     } from "../lib/logic/chart_utils.js";
-    import { getTradeMarkers } from "../lib/logic/replay.js";
-    import { calculateRSI, calculateMACD, calculateDMI_ADX } from "../lib/logic/indicators.js";
+    import {
+        calculateRSI,
+        calculateMACD,
+        calculateDMI_ADX,
+        calculateAnchoredCVD,
+        calculateDER,
+        calculateFragility,
+        calculateVolumeDelta,
+    } from "../lib/logic/indicators.js";
 
     let chartContainer;
     let subChartContainer;
@@ -23,12 +30,15 @@
 
     // Sub-pane series
     let subCvdSeries, subSmaSeries, subUpperBand, subLowerBand;
+    let subZScoreHist, subZScoreUpper, subZScoreLower;
+    let subDerHist, subDerHighThresh, subDerLowThresh;
+    let subFragilityHist, subFragilityWarning;
     let subRsiSeries, subRsiOb, subRsiOs, subRsiMid;
     let subMacdSeries, subSigSeries, subHistSeries;
     let subAdxSeries, subDiPlusSeries, subDiMinusSeries, subAdxThreshold;
     let subVolDeltaHist, subVolSmaSeries;
 
-    let activeSubPane = "CVD"; // "CVD", "RSI", "MACD", "ADX", "VOL"
+    let activeSubPane = "CVD"; // "CVD", "Z_SCORE", "DER", "FRAGILITY", "VOL", "RSI", "MACD", "ADX"
 
     function clearPriceLines() {
         if (!candleSeries) return;
@@ -111,6 +121,14 @@
             subSmaSeries = null;
             subUpperBand = null;
             subLowerBand = null;
+            subZScoreHist = null;
+            subZScoreUpper = null;
+            subZScoreLower = null;
+            subDerHist = null;
+            subDerHighThresh = null;
+            subDerLowThresh = null;
+            subFragilityHist = null;
+            subFragilityWarning = null;
             subRsiSeries = null;
             subRsiOb = null;
             subRsiOs = null;
@@ -140,8 +158,8 @@
         if (candles.length === 0) return;
 
         if (activeSubPane === "CVD") {
-            const cvdPoints = s.cvdData?.points || [];
-            if (cvdPoints.length > 0) {
+            const cvdRes = calculateAnchoredCVD(candles, s.cvdAnchor || 'daily', 20);
+            if (cvdRes.cvd.length > 0) {
                 if (!subCvdSeries) {
                     subCvdSeries = subChart.addAreaSeries({
                         topColor: "rgba(59, 130, 246, 0.4)",
@@ -156,22 +174,103 @@
                         title: "SMA 20",
                     });
                     subUpperBand = subChart.addLineSeries({
-                        color: "rgba(239, 68, 68, 0.5)",
+                        color: "rgba(239, 68, 68, 0.6)",
                         lineWidth: 1,
                         lineStyle: 2,
                         title: "+2σ",
                     });
                     subLowerBand = subChart.addLineSeries({
-                        color: "rgba(34, 197, 94, 0.5)",
+                        color: "rgba(34, 197, 94, 0.6)",
                         lineWidth: 1,
                         lineStyle: 2,
                         title: "-2σ",
                     });
                 }
-                subCvdSeries.setData(cvdPoints.map(p => ({ time: p.time, value: p.cvd })));
-                subSmaSeries.setData(cvdPoints.map(p => ({ time: p.time, value: p.cvd_sma })));
-                subUpperBand.setData(cvdPoints.map(p => ({ time: p.time, value: p.upper_band })));
-                subLowerBand.setData(cvdPoints.map(p => ({ time: p.time, value: p.lower_band })));
+                subCvdSeries.setData(cvdRes.cvd);
+                subSmaSeries.setData(cvdRes.sma);
+                subUpperBand.setData(cvdRes.upper);
+                subLowerBand.setData(cvdRes.lower);
+            }
+        } else if (activeSubPane === "Z_SCORE") {
+            const cvdRes = calculateAnchoredCVD(candles, s.cvdAnchor || 'daily', 20);
+            if (cvdRes.zScore.length > 0) {
+                if (!subZScoreHist) {
+                    subZScoreHist = subChart.addHistogramSeries({
+                        title: "CVD Z-Score",
+                    });
+                    subZScoreUpper = subChart.addLineSeries({
+                        color: "rgba(239, 68, 68, 0.7)",
+                        lineWidth: 1,
+                        lineStyle: 2,
+                        title: "+2σ Exp",
+                    });
+                    subZScoreLower = subChart.addLineSeries({
+                        color: "rgba(34, 197, 94, 0.7)",
+                        lineWidth: 1,
+                        lineStyle: 2,
+                        title: "-2σ Comp",
+                    });
+                }
+                subZScoreHist.setData(cvdRes.zScore);
+                subZScoreUpper.setData(cvdRes.zScore.map(z => ({ time: z.time, value: 2.0 })));
+                subZScoreLower.setData(cvdRes.zScore.map(z => ({ time: z.time, value: -2.0 })));
+            }
+        } else if (activeSubPane === "DER") {
+            const derData = calculateDER(candles, 14);
+            if (derData.length > 0) {
+                if (!subDerHist) {
+                    subDerHist = subChart.addHistogramSeries({
+                        title: "DER ($/Δ)",
+                    });
+                    subDerHighThresh = subChart.addLineSeries({
+                        color: "rgba(16, 185, 129, 0.7)",
+                        lineWidth: 1,
+                        lineStyle: 2,
+                        title: "Alta Eficiencia (5.0)",
+                    });
+                    subDerLowThresh = subChart.addLineSeries({
+                        color: "rgba(244, 63, 94, 0.7)",
+                        lineWidth: 1,
+                        lineStyle: 2,
+                        title: "Absorción Pasiva (1.0)",
+                    });
+                }
+                subDerHist.setData(derData);
+                subDerHighThresh.setData(derData.map(d => ({ time: d.time, value: 5.0 })));
+                subDerLowThresh.setData(derData.map(d => ({ time: d.time, value: 1.0 })));
+            }
+        } else if (activeSubPane === "FRAGILITY") {
+            const fragData = calculateFragility(candles, 20);
+            if (fragData.length > 0) {
+                if (!subFragilityHist) {
+                    subFragilityHist = subChart.addHistogramSeries({
+                        title: "Fragilidad (Ψ)",
+                    });
+                    subFragilityWarning = subChart.addLineSeries({
+                        color: "rgba(239, 68, 68, 0.7)",
+                        lineWidth: 1,
+                        lineStyle: 2,
+                        title: "Alerta Vacío (100)",
+                    });
+                }
+                subFragilityHist.setData(fragData);
+                subFragilityWarning.setData(fragData.map(f => ({ time: f.time, value: 100 })));
+            }
+        } else if (activeSubPane === "VOL") {
+            const volData = calculateVolumeDelta(candles, 20);
+            if (volData.delta.length > 0) {
+                if (!subVolDeltaHist) {
+                    subVolDeltaHist = subChart.addHistogramSeries({
+                        title: "Delta",
+                    });
+                    subVolSmaSeries = subChart.addLineSeries({
+                        color: "#f59e0b",
+                        lineWidth: 1.5,
+                        title: "Vol SMA 20",
+                    });
+                }
+                subVolDeltaHist.setData(volData.delta);
+                subVolSmaSeries.setData(volData.sma);
             }
         } else if (activeSubPane === "RSI") {
             const rsiData = calculateRSI(candles, 14);
@@ -257,40 +356,6 @@
                 subDiPlusSeries.setData(dmiRes.diPlus);
                 subDiMinusSeries.setData(dmiRes.diMinus);
                 subAdxThreshold.setData(dmiRes.adx.map(a => ({ time: a.time, value: 25 })));
-            }
-        } else if (activeSubPane === "VOL") {
-            if (!subVolDeltaHist) {
-                subVolDeltaHist = subChart.addHistogramSeries({
-                    title: "Delta",
-                });
-                subVolSmaSeries = subChart.addLineSeries({
-                    color: "#f59e0b",
-                    lineWidth: 1.5,
-                    title: "Vol SMA 20",
-                });
-            }
-            const deltaData = candles.map(c => {
-                const d = c.delta || 0;
-                return {
-                    time: c.time,
-                    value: d,
-                    color: d >= 0 ? 'rgba(34, 197, 94, 0.7)' : 'rgba(239, 68, 68, 0.7)'
-                };
-            });
-            subVolDeltaHist.setData(deltaData);
-
-            // Compute Vol SMA 20
-            const smaData = [];
-            let sumVol = 0;
-            for (let i = 0; i < candles.length; i++) {
-                sumVol += (candles[i].volume || 0);
-                if (i >= 20) {
-                    sumVol -= (candles[i - 20].volume || 0);
-                    smaData.push({ time: candles[i].time, value: sumVol / 20 });
-                }
-            }
-            if (smaData.length > 0) {
-                subVolSmaSeries.setData(smaData);
             }
         }
     }
@@ -535,6 +600,34 @@
             ⚡ CVD FLOW
         </button>
         <button 
+            on:click={() => switchSubPane("Z_SCORE")}
+            class="px-2.5 py-1 text-[9px] font-bold rounded transition-all {activeSubPane === 'Z_SCORE' ? 'bg-cyan-600 text-white shadow' : 'text-slate-400 hover:text-white'}"
+            title="Anchored CVD Z-Score Series (±2σ Breakout Bands)"
+        >
+            🌊 Z-SCORE
+        </button>
+        <button 
+            on:click={() => switchSubPane("DER")}
+            class="px-2.5 py-1 text-[9px] font-bold rounded transition-all {activeSubPane === 'DER' ? 'bg-indigo-600 text-white shadow' : 'text-slate-400 hover:text-white'}"
+            title="Delta Efficiency Ratio ($ Price Delta / Delta Volume)"
+        >
+            ⚡ DER
+        </button>
+        <button 
+            on:click={() => switchSubPane("FRAGILITY")}
+            class="px-2.5 py-1 text-[9px] font-bold rounded transition-all {activeSubPane === 'FRAGILITY' ? 'bg-rose-600 text-white shadow' : 'text-slate-400 hover:text-white'}"
+            title="Liquidity Fragility Index (Ψ = Price Impact / Vol)"
+        >
+            🛡️ FRAGILITY
+        </button>
+        <button 
+            on:click={() => switchSubPane("VOL")}
+            class="px-2.5 py-1 text-[9px] font-bold rounded transition-all {activeSubPane === 'VOL' ? 'bg-emerald-600 text-white shadow' : 'text-slate-400 hover:text-white'}"
+            title="Volume Delta & SMA Histogram"
+        >
+            📦 VOL/DELTA
+        </button>
+        <button 
             on:click={() => switchSubPane("RSI")}
             class="px-2.5 py-1 text-[9px] font-bold rounded transition-all {activeSubPane === 'RSI' ? 'bg-purple-600 text-white shadow' : 'text-slate-400 hover:text-white'}"
             title="Relative Strength Index (RSI 14)"
@@ -554,13 +647,6 @@
             title="Average Directional Index & DMI (+DI / -DI)"
         >
             📈 ADX / DMI
-        </button>
-        <button 
-            on:click={() => switchSubPane("VOL")}
-            class="px-2.5 py-1 text-[9px] font-bold rounded transition-all {activeSubPane === 'VOL' ? 'bg-emerald-600 text-white shadow' : 'text-slate-400 hover:text-white'}"
-            title="Volume Delta & SMA Histogram"
-        >
-            📦 VOL/DELTA
         </button>
     </div>
 
