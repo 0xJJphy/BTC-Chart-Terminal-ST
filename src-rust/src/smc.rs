@@ -224,6 +224,9 @@ pub fn create_trade(idx: usize, trade_type: &str, entry: f64, sl: f64, candles: 
         } else {
             entry - ((entry - sl).abs() * risk_reward)
         },
+        tp1: None,
+        tp2: None,
+        tp3: None,
         signal_time: candles[idx].time,
         time: candles[idx].time,
         pnl: 0.0,
@@ -231,6 +234,8 @@ pub fn create_trade(idx: usize, trade_type: &str, entry: f64, sl: f64, candles: 
         desc: "SMC Setup (Rust)".to_string(),
         entry_time: None,
         exit_time: None,
+        setup_score: None,
+        dashboard_snapshot: None,
     };
 
     process_trade_lifecycle(&mut trade, idx, candles, risk_reward);

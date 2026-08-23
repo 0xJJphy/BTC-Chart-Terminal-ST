@@ -313,3 +313,69 @@ export function calculateMACD(candles, fast = 12, slow = 26, signal = 9) {
     }
     return { macd: macdRes, signal: sigRes, hist: histRes };
 }
+
+export function calculateDMI_ADX(candles, period = 14) {
+    if (!candles || candles.length <= period * 2) return { adx: [], diPlus: [], diMinus: [] };
+    const n = candles.length;
+    const tr = new Float64Array(n);
+    const plusDm = new Float64Array(n);
+    const minusDm = new Float64Array(n);
+
+    for (let i = 1; i < n; i++) {
+        const h = candles[i].high;
+        const l = candles[i].low;
+        const prevH = candles[i - 1].high;
+        const prevL = candles[i - 1].low;
+        const prevC = candles[i - 1].close;
+
+        tr[i] = Math.max(h - l, Math.abs(h - prevC), Math.abs(l - prevC));
+        const upMove = h - prevH;
+        const downMove = prevL - l;
+
+        if (upMove > downMove && upMove > 0) plusDm[i] = upMove;
+        if (downMove > upMove && downMove > 0) minusDm[i] = downMove;
+    }
+
+    let smoothTr = 0, smoothPlusDm = 0, smoothMinusDm = 0;
+    for (let i = 1; i <= period; i++) {
+        smoothTr += tr[i];
+        smoothPlusDm += plusDm[i];
+        smoothMinusDm += minusDm[i];
+    }
+
+    const diPlus = [];
+    const diMinus = [];
+    const dx = new Float64Array(n);
+
+    for (let i = period; i < n; i++) {
+        if (i > period) {
+            smoothTr = smoothTr - (smoothTr / period) + tr[i];
+            smoothPlusDm = smoothPlusDm - (smoothPlusDm / period) + plusDm[i];
+            smoothMinusDm = smoothMinusDm - (smoothMinusDm / period) + minusDm[i];
+        }
+
+        const dip = smoothTr > 0 ? (smoothPlusDm / smoothTr) * 100 : 0;
+        const dim = smoothTr > 0 ? (smoothMinusDm / smoothTr) * 100 : 0;
+        diPlus.push({ time: candles[i].time, value: dip });
+        diMinus.push({ time: candles[i].time, value: dim });
+
+        const sumDi = dip + dim;
+        dx[i] = sumDi > 0 ? (Math.abs(dip - dim) / sumDi) * 100 : 0;
+    }
+
+    let smoothAdx = 0;
+    for (let i = period; i < period * 2 && i < n; i++) {
+        smoothAdx += dx[i];
+    }
+    smoothAdx /= period;
+
+    const adx = [];
+    for (let i = period * 2 - 1; i < n; i++) {
+        if (i > period * 2 - 1) {
+            smoothAdx = (smoothAdx * (period - 1) + dx[i]) / period;
+        }
+        adx.push({ time: candles[i].time, value: smoothAdx });
+    }
+
+    return { adx, diPlus, diMinus };
+}

@@ -42,6 +42,9 @@ pub struct Trade {
     pub entry: f64,
     pub sl: f64,
     pub tp: f64,
+    pub tp1: Option<f64>,
+    pub tp2: Option<f64>,
+    pub tp3: Option<f64>,
     pub signal_time: u64,
     pub time: u64,
     pub pnl: f64,
@@ -49,4 +52,6 @@ pub struct Trade {
     pub desc: String,
     pub entry_time: Option<u64>,
     pub exit_time: Option<u64>,
+    pub setup_score: Option<f64>,
+    pub dashboard_snapshot: Option<serde_json::Value>,
 }

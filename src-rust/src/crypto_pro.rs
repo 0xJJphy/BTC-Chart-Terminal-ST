@@ -228,6 +228,7 @@ pub fn analyze_crypto_pro(candles: &[Candle], config: &CryptoProConfig) -> Crypt
     let mut active_trade_side = "";
     let mut active_entry = 0.0;
     let mut active_sl = 0.0;
+    let mut active_initial_sl = 0.0;
     let mut active_tp1 = 0.0;
     let mut active_tp2 = 0.0;
     let mut active_tp3 = 0.0;
@@ -235,6 +236,9 @@ pub fn analyze_crypto_pro(candles: &[Candle], config: &CryptoProConfig) -> Crypt
     let mut active_tp2_reached = false;
     let mut active_pos_size = 0.0;
     let mut active_entry_time = 0;
+    let mut active_signal_time = 0;
+    let mut active_score = 0.0;
+    let mut active_snapshot: Option<serde_json::Value> = None;
 
     let start_idx = 50.max(config.pivot_left + config.pivot_right + 1);
 
@@ -330,26 +334,33 @@ pub fn analyze_crypto_pro(candles: &[Candle], config: &CryptoProConfig) -> Crypt
             }
 
             if trade_closed {
-                let pnl_pct = if active_trade_side == "LONG" {
-                    ((exit_price - active_entry) / active_entry) * 100.0 * config.leverage
+                let (is_win, pnl_r) = if exit_reason == "TP3" {
+                    (true, 1.75)
+                } else if exit_reason == "BE (SL After TP)" {
+                    if active_tp2_reached { (true, 1.00) } else { (true, 0.50) }
                 } else {
-                    ((active_entry - exit_price) / active_entry) * 100.0 * config.leverage
+                    (false, -1.00)
                 };
 
                 trades.push(Trade {
                     id: format!("PRO-{}", trade_id_counter),
                     trade_type: active_trade_side.to_string(),
-                    status: if pnl_pct > 0.0 { "WIN".to_string() } else { "LOSS".to_string() },
+                    status: if is_win { "WIN".to_string() } else { "LOSS".to_string() },
                     entry: active_entry,
-                    sl: active_sl,
+                    sl: active_initial_sl,
                     tp: active_tp2,
-                    signal_time: active_entry_time,
-                    time: active_entry_time,
-                    pnl: (pnl_pct / 100.0) * active_pos_size,
-                    pnl_percent: pnl_pct,
+                    tp1: Some(active_tp1),
+                    tp2: Some(active_tp2),
+                    tp3: Some(active_tp3),
+                    signal_time: active_signal_time as u64,
+                    time: active_entry_time as u64,
+                    pnl: pnl_r,
+                    pnl_percent: pnl_r * config.risk_percent,
                     desc: format!("CryptoPRO {}: {} @ ${:.2}", active_trade_side, exit_reason, exit_price),
-                    entry_time: Some(active_entry_time),
-                    exit_time: Some(c.time),
+                    entry_time: Some(active_entry_time as u64),
+                    exit_time: Some(c.time as u64),
+                    setup_score: Some(active_score),
+                    dashboard_snapshot: active_snapshot.clone(),
                 });
                 trade_id_counter += 1;
                 in_active_trade = false;
@@ -401,6 +412,7 @@ pub fn analyze_crypto_pro(candles: &[Candle], config: &CryptoProConfig) -> Crypt
                             active_trade_side = "LONG";
                             active_entry = c.close;
                             active_sl = (c.close - curr_atr * config.atr_multiplier).max(c.close - curr_atr * config.max_sl_atr);
+                            active_initial_sl = active_sl;
                             let risk_dist = (active_entry - active_sl).max(0.01);
                             active_tp1 = active_entry + risk_dist * config.rr_tp1;
                             active_tp2 = active_entry + risk_dist * config.rr_tp2;
@@ -409,6 +421,56 @@ pub fn analyze_crypto_pro(candles: &[Candle], config: &CryptoProConfig) -> Crypt
                             active_tp1_reached = false;
                             active_tp2_reached = false;
                             active_entry_time = c.time;
+                            active_signal_time = c.time;
+                            active_score = score_long;
+                            active_snapshot = Some(serde_json::json!({
+                                "signal": "LONG",
+                                "strengthLong": score_long,
+                                "strengthShort": score_short,
+                                "probUp": 75.0,
+                                "probDn": 25.0,
+                                "adxValue": (dmi.adx[i] * 10.0).round() / 10.0,
+                                "adxRegime": if dmi.adx[i] >= 35.0 { "TENDENCIA MUY FUERTE" } else if dmi.adx[i] >= 25.0 { "TENDENCIA FUERTE" } else { "RANGO" },
+                                "diBias": format!("ALCISTA (+{:.0} / -{:.0})", dmi.di_plus[i], dmi.di_minus[i]),
+                                "macdState": if macd.hist[i] > 0.0 { "ALCISTA" } else { "BAJISTA" },
+                                "rsiValue": (rsi[i] * 10.0).round() / 10.0,
+                                "rsiState": if rsi[i] >= 70.0 { "SOBRECOMPRA" } else if rsi[i] <= 30.0 { "SOBREVENTA" } else { "NEUTRAL" },
+                                "volumeRatio": (vol_ratio * 10.0).round() / 10.0,
+                                "volumeState": if vol_ratio >= config.very_high_volume { "MUY ALTO" } else if vol_ratio >= config.high_volume { "ALTO" } else { "NORMAL" },
+                                "trapState": "NINGUNA",
+                                "zoneState": "DIRECTO (CONFLUENCIA)",
+                                "currentEntry": active_entry,
+                                "currentSl": active_initial_sl,
+                                "currentTp1": active_tp1,
+                                "currentTp2": active_tp2,
+                                "currentTp3": active_tp3,
+                                "riskReward": "1 : 2.0 (DINÁMICO)",
+                                "tradeProgress": "EJECUTADO ✓",
+                                "totalTrades": trades.len() + 1,
+                                "winningTrades": tp1_hits,
+                                "losingTrades": sl_hits,
+                                "tp1Count": tp1_hits,
+                                "tp2Count": tp2_hits,
+                                "tp3Count": tp3_hits,
+                                "slNoTpCount": sl_hits,
+                                "winRate": if (tp1_hits + sl_hits) > 0 { ((tp1_hits as f64 / (tp1_hits + sl_hits) as f64) * 100.0).round() } else { 50.0 },
+                                "initialCapital": config.initial_capital,
+                                "capitalPerTrade": config.capital_per_trade,
+                                "currentCapital": current_capital,
+                                "totalPnl": current_capital - config.initial_capital,
+                                "pnlTp1": pnl_tp1_acc,
+                                "pnlTp2": pnl_tp2_acc,
+                                "pnlTp3": pnl_tp3_acc,
+                                "pnlSlTotal": pnl_sl_acc,
+                                "leverage": config.leverage,
+                                "riskPerTradePct": config.risk_percent,
+                                "analysisDays": config.analysis_days,
+                                "pnlPerDay": (current_capital - config.initial_capital) / (config.analysis_days as f64).max(1.0),
+                                "periodPnl": current_capital - config.initial_capital,
+                                "periodTrades": trades.len() + 1,
+                                "periodWinRate": if (tp1_hits + sl_hits) > 0 { ((tp1_hits as f64 / (tp1_hits + sl_hits) as f64) * 100.0).round() } else { 50.0 },
+                                "limitStatus": "ORDEN EJECUTADA ✓"
+                            }));
                         }
                     } else if score_short >= config.minimum_score {
                         if config.wait_for_retest {
@@ -418,6 +480,7 @@ pub fn analyze_crypto_pro(candles: &[Candle], config: &CryptoProConfig) -> Crypt
                             active_trade_side = "SHORT";
                             active_entry = c.close;
                             active_sl = (c.close + curr_atr * config.atr_multiplier).min(c.close + curr_atr * config.max_sl_atr);
+                            active_initial_sl = active_sl;
                             let risk_dist = (active_sl - active_entry).max(0.01);
                             active_tp1 = active_entry - risk_dist * config.rr_tp1;
                             active_tp2 = active_entry - risk_dist * config.rr_tp2;
@@ -426,10 +489,60 @@ pub fn analyze_crypto_pro(candles: &[Candle], config: &CryptoProConfig) -> Crypt
                             active_tp1_reached = false;
                             active_tp2_reached = false;
                             active_entry_time = c.time;
+                            active_signal_time = c.time;
+                            active_score = score_short;
+                            active_snapshot = Some(serde_json::json!({
+                                "signal": "SHORT",
+                                "strengthLong": score_long,
+                                "strengthShort": score_short,
+                                "probUp": 25.0,
+                                "probDn": 75.0,
+                                "adxValue": (dmi.adx[i] * 10.0).round() / 10.0,
+                                "adxRegime": if dmi.adx[i] >= 35.0 { "TENDENCIA MUY FUERTE" } else if dmi.adx[i] >= 25.0 { "TENDENCIA FUERTE" } else { "RANGO" },
+                                "diBias": format!("BAJISTA (+{:.0} / -{:.0})", dmi.di_plus[i], dmi.di_minus[i]),
+                                "macdState": if macd.hist[i] < 0.0 { "BAJISTA" } else { "ALCISTA" },
+                                "rsiValue": (rsi[i] * 10.0).round() / 10.0,
+                                "rsiState": if rsi[i] <= 30.0 { "SOBREVENTA" } else if rsi[i] >= 70.0 { "SOBRECOMPRA" } else { "NEUTRAL" },
+                                "volumeRatio": (vol_ratio * 10.0).round() / 10.0,
+                                "volumeState": if vol_ratio >= config.very_high_volume { "MUY ALTO" } else if vol_ratio >= config.high_volume { "ALTO" } else { "NORMAL" },
+                                "trapState": "NINGUNA",
+                                "zoneState": "DIRECTO (CONFLUENCIA)",
+                                "currentEntry": active_entry,
+                                "currentSl": active_initial_sl,
+                                "currentTp1": active_tp1,
+                                "currentTp2": active_tp2,
+                                "currentTp3": active_tp3,
+                                "riskReward": "1 : 2.0 (DINÁMICO)",
+                                "tradeProgress": "EJECUTADO ✓",
+                                "totalTrades": trades.len() + 1,
+                                "winningTrades": tp1_hits,
+                                "losingTrades": sl_hits,
+                                "tp1Count": tp1_hits,
+                                "tp2Count": tp2_hits,
+                                "tp3Count": tp3_hits,
+                                "slNoTpCount": sl_hits,
+                                "winRate": if (tp1_hits + sl_hits) > 0 { ((tp1_hits as f64 / (tp1_hits + sl_hits) as f64) * 100.0).round() } else { 50.0 },
+                                "initialCapital": config.initial_capital,
+                                "capitalPerTrade": config.capital_per_trade,
+                                "currentCapital": current_capital,
+                                "totalPnl": current_capital - config.initial_capital,
+                                "pnlTp1": pnl_tp1_acc,
+                                "pnlTp2": pnl_tp2_acc,
+                                "pnlTp3": pnl_tp3_acc,
+                                "pnlSlTotal": pnl_sl_acc,
+                                "leverage": config.leverage,
+                                "riskPerTradePct": config.risk_percent,
+                                "analysisDays": config.analysis_days,
+                                "pnlPerDay": (current_capital - config.initial_capital) / (config.analysis_days as f64).max(1.0),
+                                "periodPnl": current_capital - config.initial_capital,
+                                "periodTrades": trades.len() + 1,
+                                "periodWinRate": if (tp1_hits + sl_hits) > 0 { ((tp1_hits as f64 / (tp1_hits + sl_hits) as f64) * 100.0).round() } else { 50.0 },
+                                "limitStatus": "ORDEN EJECUTADA ✓"
+                            }));
                         }
                     }
                 }
-                RetestState::ArmedLong { pivot_price, bar_idx, score: _ } => {
+                RetestState::ArmedLong { pivot_price, bar_idx, score } => {
                     if i - bar_idx > config.max_wait_bars {
                         retest_state = RetestState::Idle;
                     } else {
@@ -442,6 +555,7 @@ pub fn analyze_crypto_pro(candles: &[Candle], config: &CryptoProConfig) -> Crypt
                             active_trade_side = "LONG";
                             active_entry = c.close;
                             active_sl = (c.low - curr_atr * 0.5).max(c.close - curr_atr * config.max_sl_atr);
+                            active_initial_sl = active_sl;
                             let risk_dist = (active_entry - active_sl).max(0.01);
                             active_tp1 = active_entry + risk_dist * config.rr_tp1;
                             active_tp2 = active_entry + risk_dist * config.rr_tp2;
@@ -450,11 +564,61 @@ pub fn analyze_crypto_pro(candles: &[Candle], config: &CryptoProConfig) -> Crypt
                             active_tp1_reached = false;
                             active_tp2_reached = false;
                             active_entry_time = c.time;
+                            active_signal_time = candles[bar_idx].time;
+                            active_score = score;
+                            active_snapshot = Some(serde_json::json!({
+                                "signal": "LONG",
+                                "strengthLong": score,
+                                "strengthShort": 0.0,
+                                "probUp": 80.0,
+                                "probDn": 20.0,
+                                "adxValue": (dmi.adx[i] * 10.0).round() / 10.0,
+                                "adxRegime": if dmi.adx[i] >= 35.0 { "TENDENCIA MUY FUERTE" } else if dmi.adx[i] >= 25.0 { "TENDENCIA FUERTE" } else { "RANGO" },
+                                "diBias": format!("ALCISTA (+{:.0} / -{:.0})", dmi.di_plus[i], dmi.di_minus[i]),
+                                "macdState": if macd.hist[i] > 0.0 { "ALCISTA" } else { "BAJISTA" },
+                                "rsiValue": (rsi[i] * 10.0).round() / 10.0,
+                                "rsiState": if rsi[i] >= 70.0 { "SOBRECOMPRA" } else if rsi[i] <= 30.0 { "SOBREVENTA" } else { "NEUTRAL" },
+                                "volumeRatio": (vol_ratio * 10.0).round() / 10.0,
+                                "volumeState": if vol_ratio >= config.very_high_volume { "MUY ALTO" } else if vol_ratio >= config.high_volume { "ALTO" } else { "NORMAL" },
+                                "trapState": "NINGUNA",
+                                "zoneState": "RETEST CONFIRMADO ✓",
+                                "currentEntry": active_entry,
+                                "currentSl": active_initial_sl,
+                                "currentTp1": active_tp1,
+                                "currentTp2": active_tp2,
+                                "currentTp3": active_tp3,
+                                "riskReward": "1 : 2.0 (DINÁMICO)",
+                                "tradeProgress": "EJECUTADO ✓",
+                                "totalTrades": trades.len() + 1,
+                                "winningTrades": tp1_hits,
+                                "losingTrades": sl_hits,
+                                "tp1Count": tp1_hits,
+                                "tp2Count": tp2_hits,
+                                "tp3Count": tp3_hits,
+                                "slNoTpCount": sl_hits,
+                                "winRate": if (tp1_hits + sl_hits) > 0 { ((tp1_hits as f64 / (tp1_hits + sl_hits) as f64) * 100.0).round() } else { 50.0 },
+                                "initialCapital": config.initial_capital,
+                                "capitalPerTrade": config.capital_per_trade,
+                                "currentCapital": current_capital,
+                                "totalPnl": current_capital - config.initial_capital,
+                                "pnlTp1": pnl_tp1_acc,
+                                "pnlTp2": pnl_tp2_acc,
+                                "pnlTp3": pnl_tp3_acc,
+                                "pnlSlTotal": pnl_sl_acc,
+                                "leverage": config.leverage,
+                                "riskPerTradePct": config.risk_percent,
+                                "analysisDays": config.analysis_days,
+                                "pnlPerDay": (current_capital - config.initial_capital) / (config.analysis_days as f64).max(1.0),
+                                "periodPnl": current_capital - config.initial_capital,
+                                "periodTrades": trades.len() + 1,
+                                "periodWinRate": if (tp1_hits + sl_hits) > 0 { ((tp1_hits as f64 / (tp1_hits + sl_hits) as f64) * 100.0).round() } else { 50.0 },
+                                "limitStatus": "ORDEN EJECUTADA ✓"
+                            }));
                             retest_state = RetestState::Idle;
                         }
                     }
                 }
-                RetestState::ArmedShort { pivot_price, bar_idx, score: _ } => {
+                RetestState::ArmedShort { pivot_price, bar_idx, score } => {
                     if i - bar_idx > config.max_wait_bars {
                         retest_state = RetestState::Idle;
                     } else {
@@ -467,6 +631,7 @@ pub fn analyze_crypto_pro(candles: &[Candle], config: &CryptoProConfig) -> Crypt
                             active_trade_side = "SHORT";
                             active_entry = c.close;
                             active_sl = (c.high + curr_atr * 0.5).min(c.close + curr_atr * config.max_sl_atr);
+                            active_initial_sl = active_sl;
                             let risk_dist = (active_sl - active_entry).max(0.01);
                             active_tp1 = active_entry - risk_dist * config.rr_tp1;
                             active_tp2 = active_entry - risk_dist * config.rr_tp2;
@@ -475,6 +640,56 @@ pub fn analyze_crypto_pro(candles: &[Candle], config: &CryptoProConfig) -> Crypt
                             active_tp1_reached = false;
                             active_tp2_reached = false;
                             active_entry_time = c.time;
+                            active_signal_time = candles[bar_idx].time;
+                            active_score = score;
+                            active_snapshot = Some(serde_json::json!({
+                                "signal": "SHORT",
+                                "strengthLong": 0.0,
+                                "strengthShort": score,
+                                "probUp": 20.0,
+                                "probDn": 80.0,
+                                "adxValue": (dmi.adx[i] * 10.0).round() / 10.0,
+                                "adxRegime": if dmi.adx[i] >= 35.0 { "TENDENCIA MUY FUERTE" } else if dmi.adx[i] >= 25.0 { "TENDENCIA FUERTE" } else { "RANGO" },
+                                "diBias": format!("BAJISTA (+{:.0} / -{:.0})", dmi.di_plus[i], dmi.di_minus[i]),
+                                "macdState": if macd.hist[i] < 0.0 { "BAJISTA" } else { "ALCISTA" },
+                                "rsiValue": (rsi[i] * 10.0).round() / 10.0,
+                                "rsiState": if rsi[i] <= 30.0 { "SOBREVENTA" } else if rsi[i] >= 70.0 { "SOBRECOMPRA" } else { "NEUTRAL" },
+                                "volumeRatio": (vol_ratio * 10.0).round() / 10.0,
+                                "volumeState": if vol_ratio >= config.very_high_volume { "MUY ALTO" } else if vol_ratio >= config.high_volume { "ALTO" } else { "NORMAL" },
+                                "trapState": "NINGUNA",
+                                "zoneState": "RETEST CONFIRMADO ✓",
+                                "currentEntry": active_entry,
+                                "currentSl": active_initial_sl,
+                                "currentTp1": active_tp1,
+                                "currentTp2": active_tp2,
+                                "currentTp3": active_tp3,
+                                "riskReward": "1 : 2.0 (DINÁMICO)",
+                                "tradeProgress": "EJECUTADO ✓",
+                                "totalTrades": trades.len() + 1,
+                                "winningTrades": tp1_hits,
+                                "losingTrades": sl_hits,
+                                "tp1Count": tp1_hits,
+                                "tp2Count": tp2_hits,
+                                "tp3Count": tp3_hits,
+                                "slNoTpCount": sl_hits,
+                                "winRate": if (tp1_hits + sl_hits) > 0 { ((tp1_hits as f64 / (tp1_hits + sl_hits) as f64) * 100.0).round() } else { 50.0 },
+                                "initialCapital": config.initial_capital,
+                                "capitalPerTrade": config.capital_per_trade,
+                                "currentCapital": current_capital,
+                                "totalPnl": current_capital - config.initial_capital,
+                                "pnlTp1": pnl_tp1_acc,
+                                "pnlTp2": pnl_tp2_acc,
+                                "pnlTp3": pnl_tp3_acc,
+                                "pnlSlTotal": pnl_sl_acc,
+                                "leverage": config.leverage,
+                                "riskPerTradePct": config.risk_percent,
+                                "analysisDays": config.analysis_days,
+                                "pnlPerDay": (current_capital - config.initial_capital) / (config.analysis_days as f64).max(1.0),
+                                "periodPnl": current_capital - config.initial_capital,
+                                "periodTrades": trades.len() + 1,
+                                "periodWinRate": if (tp1_hits + sl_hits) > 0 { ((tp1_hits as f64 / (tp1_hits + sl_hits) as f64) * 100.0).round() } else { 50.0 },
+                                "limitStatus": "ORDEN EJECUTADA ✓"
+                            }));
                             retest_state = RetestState::Idle;
                         }
                     }

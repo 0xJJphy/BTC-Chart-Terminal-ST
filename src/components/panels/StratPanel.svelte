@@ -1,5 +1,5 @@
 <script>
-    import { state } from "../../lib/stores/app.js";
+    import { state, APP } from "../../lib/stores/app.js";
     import {
         executeStrategy,
         executeOptimizer,
@@ -216,17 +216,18 @@
 
         <!-- CRYPTO SMART PRO v2 DASHBOARD TABLE -->
         {#if $state.cryptoProDashboard}
-            {@const cp = $state.cryptoProDashboard}
-            <div class="bg-black/40 rounded-xl border border-blue-500/40 overflow-hidden shadow-2xl space-y-0 text-[9px] font-mono">
-                <!-- Header -->
-                <div class="bg-blue-600 px-3 py-1.5 flex justify-between items-center text-white font-bold text-[10px] tracking-wider uppercase">
-                    <span class="flex items-center gap-1.5">
-                        <i class="fas fa-crown text-yellow-300"></i>
-                        CRYPTO PRO v2
-                    </span>
-                    <span class="bg-blue-800 px-1.5 py-0.5 rounded text-[8.5px]">
-                        4H / 15D
-                    </span>
+            {@const isTradeAudit = $state.isReplayMode && $state.selectedTrade?.dashboardSnapshot}
+            {@const cp = isTradeAudit ? $state.selectedTrade.dashboardSnapshot : $state.cryptoProDashboard}
+            <div class="bg-black/40 rounded-xl border {isTradeAudit ? 'border-amber-500/60 ring-1 ring-amber-500/30' : 'border-blue-500/40'} overflow-hidden shadow-2xl space-y-0 text-[9px] font-mono">
+                <!-- HEADER -->
+                <div class="{isTradeAudit ? 'bg-amber-950/40 border-amber-500/40 text-amber-300' : 'bg-blue-950/40 border-blue-500/40 text-blue-300'} px-3 py-2 border-b flex justify-between items-center">
+                    <div class="flex items-center gap-1.5 font-bold uppercase tracking-wider">
+                        <i class="fas {isTradeAudit ? 'fa-crosshairs text-amber-400' : 'fa-crown text-amber-400'}"></i> 
+                        {isTradeAudit ? `TRADE SNAPSHOT (${$state.selectedTrade?.id})` : 'CRYPTO PRO V2'}
+                    </div>
+                    <div class="text-[8px] {isTradeAudit ? 'bg-amber-500/20 text-amber-300 border-amber-500/30' : 'bg-blue-500/20 text-blue-400 border-blue-500/30'} px-1.5 py-0.5 rounded border">
+                        {isTradeAudit ? `${$state.selectedTrade?.type} @ $${$state.selectedTrade?.entry?.toFixed(1)}` : `${APP.interval} / 15D`}
+                    </div>
                 </div>
 
                 <div class="divide-y divide-border/20 text-slate-300">

@@ -1,3 +1,5 @@
+#![recursion_limit = "512"]
+
 pub mod models;
 pub mod indicators;
 pub mod smc;

@@ -10,7 +10,7 @@
         TradeExecutionPrimitive,
     } from "../lib/logic/chart_utils.js";
     import { getTradeMarkers } from "../lib/logic/replay.js";
-    import { calculateRSI, calculateMACD } from "../lib/logic/indicators.js";
+    import { calculateRSI, calculateMACD, calculateDMI_ADX } from "../lib/logic/indicators.js";
 
     let chartContainer;
     let subChartContainer;
@@ -25,8 +25,10 @@
     let subCvdSeries, subSmaSeries, subUpperBand, subLowerBand;
     let subRsiSeries, subRsiOb, subRsiOs, subRsiMid;
     let subMacdSeries, subSigSeries, subHistSeries;
+    let subAdxSeries, subDiPlusSeries, subDiMinusSeries, subAdxThreshold;
+    let subVolDeltaHist, subVolSmaSeries;
 
-    let activeSubPane = "CVD"; // "CVD", "RSI", "MACD", "VOL"
+    let activeSubPane = "CVD"; // "CVD", "RSI", "MACD", "ADX", "VOL"
 
     function clearPriceLines() {
         if (!candleSeries) return;
@@ -172,18 +174,25 @@
             subUpperBand = null;
             subLowerBand = null;
             subRsiSeries = null;
+            subRsiOb = null;
+            subRsiOs = null;
+            subRsiMid = null;
             subMacdSeries = null;
             subSigSeries = null;
             subHistSeries = null;
+            subAdxSeries = null;
+            subDiPlusSeries = null;
+            subDiMinusSeries = null;
+            subAdxThreshold = null;
+            subVolDeltaHist = null;
+            subVolSmaSeries = null;
         }
     }
 
     function switchSubPane(mode) {
         activeSubPane = mode;
         destroySubChart();
-        if (mode !== "VOL") {
-            setTimeout(initSubChart, 50);
-        }
+        setTimeout(initSubChart, 50);
     }
 
     function updateSubChartData(passedState = null) {
@@ -279,6 +288,71 @@
                 subMacdSeries.setData(macdRes.macd);
                 subSigSeries.setData(macdRes.signal);
                 subHistSeries.setData(macdRes.hist);
+            }
+        } else if (activeSubPane === "ADX") {
+            const dmiRes = calculateDMI_ADX(candles, 14);
+            if (dmiRes.adx.length > 0) {
+                if (!subAdxSeries) {
+                    subAdxSeries = subChart.addLineSeries({
+                        color: "#eab308",
+                        lineWidth: 2,
+                        title: "ADX (14)",
+                    });
+                    subDiPlusSeries = subChart.addLineSeries({
+                        color: "#10b981",
+                        lineWidth: 1.5,
+                        title: "+DI",
+                    });
+                    subDiMinusSeries = subChart.addLineSeries({
+                        color: "#f43f5e",
+                        lineWidth: 1.5,
+                        title: "-DI",
+                    });
+                    subAdxThreshold = subChart.addLineSeries({
+                        color: "rgba(255, 255, 255, 0.4)",
+                        lineWidth: 1,
+                        lineStyle: 2,
+                        title: "Trend (25)",
+                    });
+                }
+                subAdxSeries.setData(dmiRes.adx);
+                subDiPlusSeries.setData(dmiRes.diPlus);
+                subDiMinusSeries.setData(dmiRes.diMinus);
+                subAdxThreshold.setData(dmiRes.adx.map(a => ({ time: a.time, value: 25 })));
+            }
+        } else if (activeSubPane === "VOL") {
+            if (!subVolDeltaHist) {
+                subVolDeltaHist = subChart.addHistogramSeries({
+                    title: "Delta",
+                });
+                subVolSmaSeries = subChart.addLineSeries({
+                    color: "#f59e0b",
+                    lineWidth: 1.5,
+                    title: "Vol SMA 20",
+                });
+            }
+            const deltaData = candles.map(c => {
+                const d = c.delta || 0;
+                return {
+                    time: c.time,
+                    value: d,
+                    color: d >= 0 ? 'rgba(34, 197, 94, 0.7)' : 'rgba(239, 68, 68, 0.7)'
+                };
+            });
+            subVolDeltaHist.setData(deltaData);
+
+            // Compute Vol SMA 20
+            const smaData = [];
+            let sumVol = 0;
+            for (let i = 0; i < candles.length; i++) {
+                sumVol += (candles[i].volume || 0);
+                if (i >= 20) {
+                    sumVol -= (candles[i - 20].volume || 0);
+                    smaData.push({ time: candles[i].time, value: sumVol / 20 });
+                }
+            }
+            if (smaData.length > 0) {
+                subVolSmaSeries.setData(smaData);
             }
         }
     }
@@ -536,15 +610,22 @@
         </button>
         <button 
             on:click={() => switchSubPane("MACD")}
-            class="px-2.5 py-1 text-[9px] font-bold rounded transition-all {activeSubPane === 'MACD' ? 'bg-cyan-600 text-white shadow' : 'text-slate-400 hover:text-white'}"
+            class="px-2.5 py-1 text-[9px] font-bold rounded transition-all {activeSubPane === 'MACD' ? 'bg-sky-600 text-white shadow' : 'text-slate-400 hover:text-white'}"
             title="Moving Average Convergence Divergence (MACD 12,26,9)"
         >
             🌊 MACD
         </button>
         <button 
+            on:click={() => switchSubPane("ADX")}
+            class="px-2.5 py-1 text-[9px] font-bold rounded transition-all {activeSubPane === 'ADX' ? 'bg-amber-600 text-white shadow' : 'text-slate-400 hover:text-white'}"
+            title="Average Directional Index & DMI (+DI / -DI)"
+        >
+            📈 ADX / DMI
+        </button>
+        <button 
             on:click={() => switchSubPane("VOL")}
-            class="px-2.5 py-1 text-[9px] font-bold rounded transition-all {activeSubPane === 'VOL' ? 'bg-slate-700 text-white shadow' : 'text-slate-400 hover:text-white'}"
-            title="Standard Volume Histogram"
+            class="px-2.5 py-1 text-[9px] font-bold rounded transition-all {activeSubPane === 'VOL' ? 'bg-emerald-600 text-white shadow' : 'text-slate-400 hover:text-white'}"
+            title="Volume Delta & SMA Histogram"
         >
             📦 VOL/DELTA
         </button>
