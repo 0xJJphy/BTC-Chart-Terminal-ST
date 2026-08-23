@@ -12,7 +12,7 @@
 
 <aside
     id="right-panel"
-    class="w-80 border-l border-border bg-panel flex flex-col shadow-2xl z-40"
+    class="w-84 xl:w-96 min-w-[340px] max-w-[420px] border-l border-border bg-panel flex flex-col shadow-2xl z-40"
 >
     {#if $state.activeMode === "zones"}
         <SMCPanel />

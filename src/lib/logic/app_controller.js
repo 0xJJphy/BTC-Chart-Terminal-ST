@@ -454,7 +454,7 @@ export async function executeStrategy(mode = 'standard') {
     let trades = [];
     let cryptoProDashboard = null;
 
-    if (mode === 'CRYPTO_PRO') {
+    if (mode === 'CRYPTO_PRO' || mode === 'crypto_pro') {
         try {
             const proRes = analyze_crypto_pro_wasm(dataset, {
                 showEma: true,

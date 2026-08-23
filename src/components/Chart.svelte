@@ -38,7 +38,32 @@
     let subVolDeltaHist, subVolSmaSeries;
     let isTradeSummaryCollapsed = false;
 
-    let activeSubPane = "CVD"; // "CVD", "Z_SCORE", "DER", "FRAGILITY", "VOL", "RSI", "MACD", "ADX"
+    // Multi-Sub-Pane Engine
+    let activeSubPanes = ["CVD"];
+    const paneInstances = new Map(); // key -> { chart, series, unsubs, node }
+
+    const SUB_PANE_DEFS = {
+        CVD: { label: "⚡ CVD OSCILLATOR & FLOW BANDS (±2σ)", color: "bg-accent", title: "CVD FLOW", icon: "fa-bolt" },
+        Z_SCORE: { label: "🌊 CVD Z-SCORE (±2σ BREAKOUT BANDS)", color: "bg-cyan-600", title: "Z-SCORE", icon: "fa-water" },
+        DER: { label: "⚡ DELTA EFFICIENCY RATIO (DER NORM)", color: "bg-indigo-600", title: "DER", icon: "fa-chart-line" },
+        FRAGILITY: { label: "🛡️ LIQUIDITY FRAGILITY INDEX (Ψ NORM)", color: "bg-rose-600", title: "FRAGILITY", icon: "fa-shield-halved" },
+        RSI: { label: "📊 RELATIVE STRENGTH INDEX (RSI 14)", color: "bg-purple-600", title: "RSI (14)", icon: "fa-chart-area" },
+        MACD: { label: "🌊 MACD (12, 26, 9) [MACD, SIGNAL, HIST]", color: "bg-sky-600", title: "MACD", icon: "fa-wave-square" },
+        ADX: { label: "📈 ADX & DMI [ADX, +DI, -DI]", color: "bg-amber-600", title: "ADX / DMI", icon: "fa-arrow-trend-up" }
+    };
+
+    function toggleSubPane(key) {
+        if (activeSubPanes.includes(key)) {
+            activeSubPanes = activeSubPanes.filter(k => k !== key);
+            const inst = paneInstances.get(key);
+            if (inst) {
+                inst.chart.remove();
+                paneInstances.delete(key);
+            }
+        } else {
+            activeSubPanes = [...activeSubPanes, key];
+        }
+    }
 
     function clearPriceLines() {
         if (!candleSeries) return;
@@ -53,7 +78,6 @@
 
     function updatePriceLines(trade) {
         clearPriceLines();
-        // Infinite full-chart lines disabled: bounded lines are now drawn strictly between entry and exit candles by TradeExecutionPrimitive
     }
 
     let boxPrimitive = new BoxPrimitive();
@@ -61,10 +85,8 @@
     let regPrimitive = new LinearRegressionPrimitive();
     let tradeExecPrimitive = new TradeExecutionPrimitive();
 
-    function initSubChart() {
-        if (!subChartContainer || subChart) return;
-
-        subChart = createChart(subChartContainer, {
+    function initSubPaneAction(node, paneKey) {
+        const subChart = createChart(node, {
             layout: {
                 background: { type: "solid", color: "#080b0e" },
                 textColor: "#94a3b8",
@@ -87,270 +109,225 @@
             },
         });
 
-        // TimeScale 1-to-1 sync with recursion guard
         let isSyncing = false;
-        chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
-            if (subChart && range && !isSyncing) {
-                isSyncing = true;
-                try {
-                    subChart.timeScale().setVisibleLogicalRange(range);
-                } finally {
-                    isSyncing = false;
-                }
-            }
-        });
-        subChart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
-            if (chart && range && !isSyncing) {
-                isSyncing = true;
-                try {
-                    chart.timeScale().setVisibleLogicalRange(range);
-                } finally {
-                    isSyncing = false;
-                }
-            }
-        });
+        const unsubs = [];
 
-        updateSubChartData();
+        if (chart) {
+            const sub1 = chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+                if (range && !isSyncing) {
+                    isSyncing = true;
+                    try { subChart.timeScale().setVisibleLogicalRange(range); } catch (e) {} finally { isSyncing = false; }
+                }
+            });
+            unsubs.push(() => chart?.timeScale()?.unsubscribeVisibleLogicalRangeChange(sub1));
+
+            const sub2 = subChart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+                if (range && !isSyncing) {
+                    isSyncing = true;
+                    try { chart.timeScale().setVisibleLogicalRange(range); } catch (e) {} finally { isSyncing = false; }
+                }
+            });
+            unsubs.push(() => subChart?.timeScale()?.unsubscribeVisibleLogicalRangeChange(sub2));
+        }
+
+        const inst = { chart: subChart, series: {}, node, unsubs };
+        paneInstances.set(paneKey, inst);
+
+        renderPaneSeries(paneKey, inst);
+        updateSinglePaneData(paneKey, inst, get(state));
+
+        // Sync initial range
+        if (chart) {
+            const mainRange = chart.timeScale().getVisibleLogicalRange();
+            if (mainRange) {
+                try { subChart.timeScale().setVisibleLogicalRange(mainRange); } catch (e) {}
+            }
+        }
+
+        return {
+            destroy() {
+                unsubs.forEach(u => typeof u === 'function' && u());
+                subChart.remove();
+                paneInstances.delete(paneKey);
+            }
+        };
     }
 
-    function destroySubChart() {
-        if (subChart) {
-            subChart.remove();
-            subChart = null;
-            subCvdSeries = null;
-            subSmaSeries = null;
-            subUpperBand = null;
-            subLowerBand = null;
-            subZScoreHist = null;
-            subZScoreUpper = null;
-            subZScoreLower = null;
-            subDerHist = null;
-            subDerHighThresh = null;
-            subDerLowThresh = null;
-            subFragilityHist = null;
-            subFragilityWarning = null;
-            subRsiSeries = null;
-            subRsiOb = null;
-            subRsiOs = null;
-            subRsiMid = null;
-            subMacdSeries = null;
-            subSigSeries = null;
-            subHistSeries = null;
-            subAdxSeries = null;
-            subDiPlusSeries = null;
-            subDiMinusSeries = null;
-            subAdxThreshold = null;
-            subVolDeltaHist = null;
-            subVolSmaSeries = null;
+    function renderPaneSeries(paneKey, inst) {
+        const sc = inst.chart;
+        if (paneKey === "CVD") {
+            inst.series.cvd = sc.addAreaSeries({
+                topColor: "rgba(59, 130, 246, 0.4)",
+                bottomColor: "rgba(59, 130, 246, 0.0)",
+                lineColor: "#3b82f6",
+                lineWidth: 2,
+                title: "CVD",
+            });
+            inst.series.sma = sc.addLineSeries({
+                color: "#f59e0b",
+                lineWidth: 1.5,
+                title: "SMA 20",
+            });
+            inst.series.upper = sc.addLineSeries({
+                color: "rgba(239, 68, 68, 0.6)",
+                lineWidth: 1,
+                lineStyle: 2,
+                title: "+2σ",
+            });
+            inst.series.lower = sc.addLineSeries({
+                color: "rgba(34, 197, 94, 0.6)",
+                lineWidth: 1,
+                lineStyle: 2,
+                title: "-2σ",
+            });
+        } else if (paneKey === "Z_SCORE") {
+            inst.series.hist = sc.addHistogramSeries({ title: "CVD Z-Score" });
+            inst.series.hist.createPriceLine({
+                price: 2.0,
+                color: "rgba(16, 185, 129, 0.5)",
+                lineWidth: 1,
+                lineStyle: 2,
+                axisLabelVisible: true,
+                title: "+2σ Exp",
+            });
+            inst.series.hist.createPriceLine({
+                price: -2.0,
+                color: "rgba(244, 63, 94, 0.5)",
+                lineWidth: 1,
+                lineStyle: 2,
+                axisLabelVisible: true,
+                title: "-2σ Comp",
+            });
+        } else if (paneKey === "DER") {
+            inst.series.hist = sc.addHistogramSeries({ title: "DER Norm" });
+            inst.series.hist.createPriceLine({
+                price: 1.8,
+                color: "rgba(16, 185, 129, 0.5)",
+                lineWidth: 1,
+                lineStyle: 2,
+                axisLabelVisible: true,
+                title: "Alta Eficiencia (1.8)",
+            });
+            inst.series.hist.createPriceLine({
+                price: 0.6,
+                color: "rgba(244, 63, 94, 0.5)",
+                lineWidth: 1,
+                lineStyle: 2,
+                axisLabelVisible: true,
+                title: "Absorción (0.6)",
+            });
+        } else if (paneKey === "FRAGILITY") {
+            inst.series.hist = sc.addHistogramSeries({ title: "Fragilidad (Ψ)" });
+            inst.series.hist.createPriceLine({
+                price: 2.2,
+                color: "rgba(239, 68, 68, 0.6)",
+                lineWidth: 1,
+                lineStyle: 2,
+                axisLabelVisible: true,
+                title: "Vacío Liq (2.2)",
+            });
+        } else if (paneKey === "RSI") {
+            inst.series.rsi = sc.addLineSeries({
+                color: "#a855f7",
+                lineWidth: 2,
+                title: "RSI 14",
+            });
+            inst.series.rsi.createPriceLine({
+                price: 70,
+                color: "rgba(244, 63, 94, 0.5)",
+                lineWidth: 1,
+                lineStyle: 2,
+                axisLabelVisible: true,
+                title: "OB (70)",
+            });
+            inst.series.rsi.createPriceLine({
+                price: 30,
+                color: "rgba(16, 185, 129, 0.5)",
+                lineWidth: 1,
+                lineStyle: 2,
+                axisLabelVisible: true,
+                title: "OS (30)",
+            });
+            inst.series.rsi.createPriceLine({
+                price: 50,
+                color: "rgba(148, 163, 184, 0.25)",
+                lineWidth: 1,
+                lineStyle: 1,
+                axisLabelVisible: false,
+            });
+        } else if (paneKey === "MACD") {
+            inst.series.macd = sc.addLineSeries({ color: "#38bdf8", lineWidth: 1.5, title: "MACD" });
+            inst.series.signal = sc.addLineSeries({ color: "#fb923c", lineWidth: 1.5, title: "Signal" });
+            inst.series.hist = sc.addHistogramSeries({ title: "Hist" });
+        } else if (paneKey === "ADX") {
+            inst.series.adx = sc.addLineSeries({ color: "#eab308", lineWidth: 2, title: "ADX" });
+            inst.series.diPlus = sc.addLineSeries({ color: "#10b981", lineWidth: 1.5, title: "+DI" });
+            inst.series.diMinus = sc.addLineSeries({ color: "#f43f5e", lineWidth: 1.5, title: "-DI" });
+            inst.series.adx.createPriceLine({
+                price: 25,
+                color: "rgba(255, 255, 255, 0.4)",
+                lineWidth: 1,
+                lineStyle: 2,
+                axisLabelVisible: true,
+                title: "Trend (25)",
+            });
         }
     }
 
-    function switchSubPane(mode) {
-        activeSubPane = mode;
-        destroySubChart();
-        setTimeout(initSubChart, 50);
-    }
+    function updateSinglePaneData(paneKey, inst, s) {
+        const candles = s?.candles || [];
+        if (candles.length === 0 || !inst.series) return;
 
-    function updateSubChartData(passedState = null) {
-        if (!subChart) return;
-        const s = passedState || get(state);
-        const candles = s.candles || [];
-        if (candles.length === 0) return;
-
-        if (activeSubPane === "CVD") {
+        if (paneKey === "CVD" && inst.series.cvd) {
             const cvdRes = calculateAnchoredCVD(candles, s.cvdAnchor || 'daily', 20);
             if (cvdRes.cvd.length > 0) {
-                if (!subCvdSeries) {
-                    subCvdSeries = subChart.addAreaSeries({
-                        topColor: "rgba(59, 130, 246, 0.4)",
-                        bottomColor: "rgba(59, 130, 246, 0.0)",
-                        lineColor: "#3b82f6",
-                        lineWidth: 2,
-                        title: "CVD",
-                    });
-                    subSmaSeries = subChart.addLineSeries({
-                        color: "#f59e0b",
-                        lineWidth: 1.5,
-                        title: "SMA 20",
-                    });
-                    subUpperBand = subChart.addLineSeries({
-                        color: "rgba(239, 68, 68, 0.6)",
-                        lineWidth: 1,
-                        lineStyle: 2,
-                        title: "+2σ",
-                    });
-                    subLowerBand = subChart.addLineSeries({
-                        color: "rgba(34, 197, 94, 0.6)",
-                        lineWidth: 1,
-                        lineStyle: 2,
-                        title: "-2σ",
-                    });
-                }
-                subCvdSeries.setData(cvdRes.cvd);
-                subSmaSeries.setData(cvdRes.sma);
-                subUpperBand.setData(cvdRes.upper);
-                subLowerBand.setData(cvdRes.lower);
+                inst.series.cvd.setData(cvdRes.cvd);
+                inst.series.sma.setData(cvdRes.sma);
+                inst.series.upper.setData(cvdRes.upper);
+                inst.series.lower.setData(cvdRes.lower);
             }
-        } else if (activeSubPane === "Z_SCORE") {
+        } else if (paneKey === "Z_SCORE" && inst.series.hist) {
             const cvdRes = calculateAnchoredCVD(candles, s.cvdAnchor || 'daily', 20);
             if (cvdRes.zScore.length > 0) {
-                if (!subZScoreHist) {
-                    subZScoreHist = subChart.addHistogramSeries({
-                        title: "CVD Z-Score",
-                    });
-                    subZScoreHist.createPriceLine({
-                        price: 2.0,
-                        color: "rgba(16, 185, 129, 0.5)",
-                        lineWidth: 1,
-                        lineStyle: 2,
-                        axisLabelVisible: true,
-                        title: "+2σ Exp",
-                    });
-                    subZScoreHist.createPriceLine({
-                        price: -2.0,
-                        color: "rgba(244, 63, 94, 0.5)",
-                        lineWidth: 1,
-                        lineStyle: 2,
-                        axisLabelVisible: true,
-                        title: "-2σ Comp",
-                    });
-                }
-                subZScoreHist.setData(cvdRes.zScore);
+                inst.series.hist.setData(cvdRes.zScore);
             }
-        } else if (activeSubPane === "DER") {
+        } else if (paneKey === "DER" && inst.series.hist) {
             const derData = calculateDER(candles, 14);
             if (derData.length > 0) {
-                if (!subDerHist) {
-                    subDerHist = subChart.addHistogramSeries({
-                        title: "DER Norm (Eficiencia)",
-                    });
-                    subDerHist.createPriceLine({
-                        price: 1.8,
-                        color: "rgba(16, 185, 129, 0.5)",
-                        lineWidth: 1,
-                        lineStyle: 2,
-                        axisLabelVisible: true,
-                        title: "Alta Eficiencia (1.8)",
-                    });
-                    subDerHist.createPriceLine({
-                        price: 0.6,
-                        color: "rgba(244, 63, 94, 0.5)",
-                        lineWidth: 1,
-                        lineStyle: 2,
-                        axisLabelVisible: true,
-                        title: "Absorción Pasiva (0.6)",
-                    });
-                }
-                subDerHist.setData(derData);
+                inst.series.hist.setData(derData);
             }
-        } else if (activeSubPane === "FRAGILITY") {
+        } else if (paneKey === "FRAGILITY" && inst.series.hist) {
             const fragData = calculateFragility(candles, 20);
             if (fragData.length > 0) {
-                if (!subFragilityHist) {
-                    subFragilityHist = subChart.addHistogramSeries({
-                        title: "Fragilidad Norm (Ψ)",
-                    });
-                    subFragilityHist.createPriceLine({
-                        price: 2.2,
-                        color: "rgba(239, 68, 68, 0.6)",
-                        lineWidth: 1,
-                        lineStyle: 2,
-                        axisLabelVisible: true,
-                        title: "Alerta Vacío (2.2)",
-                    });
-                }
-                subFragilityHist.setData(fragData);
+                inst.series.hist.setData(fragData);
             }
-        } else if (activeSubPane === "RSI") {
+        } else if (paneKey === "RSI" && inst.series.rsi) {
             const rsiData = calculateRSI(candles, 14);
             if (rsiData.length > 0) {
-                if (!subRsiSeries) {
-                    subRsiSeries = subChart.addLineSeries({
-                        color: "#a855f7",
-                        lineWidth: 2,
-                        title: "RSI 14",
-                    });
-                    subRsiSeries.createPriceLine({
-                        price: 70,
-                        color: "rgba(244, 63, 94, 0.5)",
-                        lineWidth: 1,
-                        lineStyle: 2,
-                        axisLabelVisible: true,
-                        title: "OB (70)",
-                    });
-                    subRsiSeries.createPriceLine({
-                        price: 30,
-                        color: "rgba(16, 185, 129, 0.5)",
-                        lineWidth: 1,
-                        lineStyle: 2,
-                        axisLabelVisible: true,
-                        title: "OS (30)",
-                    });
-                    subRsiSeries.createPriceLine({
-                        price: 50,
-                        color: "rgba(148, 163, 184, 0.25)",
-                        lineWidth: 1,
-                        lineStyle: 1,
-                        axisLabelVisible: false,
-                    });
-                }
-                subRsiSeries.setData(rsiData);
+                inst.series.rsi.setData(rsiData);
             }
-        } else if (activeSubPane === "MACD") {
+        } else if (paneKey === "MACD" && inst.series.macd) {
             const macdRes = calculateMACD(candles, 12, 26, 9);
             if (macdRes.macd.length > 0) {
-                if (!subMacdSeries) {
-                    subMacdSeries = subChart.addLineSeries({
-                        color: "#38bdf8",
-                        lineWidth: 1.5,
-                        title: "MACD",
-                    });
-                    subSigSeries = subChart.addLineSeries({
-                        color: "#fb923c",
-                        lineWidth: 1.5,
-                        title: "Signal",
-                    });
-                    subHistSeries = subChart.addHistogramSeries({
-                        title: "Hist",
-                    });
-                }
-                subMacdSeries.setData(macdRes.macd);
-                subSigSeries.setData(macdRes.signal);
-                subHistSeries.setData(macdRes.hist);
+                inst.series.macd.setData(macdRes.macd);
+                inst.series.signal.setData(macdRes.signal);
+                inst.series.hist.setData(macdRes.hist);
             }
-        } else if (activeSubPane === "ADX") {
+        } else if (paneKey === "ADX" && inst.series.adx) {
             const dmiRes = calculateDMI_ADX(candles, 14);
             if (dmiRes.adx.length > 0) {
-                if (!subAdxSeries) {
-                    subAdxSeries = subChart.addLineSeries({
-                        color: "#eab308",
-                        lineWidth: 2,
-                        title: "ADX (14)",
-                    });
-                    subDiPlusSeries = subChart.addLineSeries({
-                        color: "#10b981",
-                        lineWidth: 1.5,
-                        title: "+DI",
-                    });
-                    subDiMinusSeries = subChart.addLineSeries({
-                        color: "#f43f5e",
-                        lineWidth: 1.5,
-                        title: "-DI",
-                    });
-                    subAdxSeries.createPriceLine({
-                        price: 25,
-                        color: "rgba(255, 255, 255, 0.4)",
-                        lineWidth: 1,
-                        lineStyle: 2,
-                        axisLabelVisible: true,
-                        title: "Trend (25)",
-                    });
-                }
-                subAdxSeries.setData(dmiRes.adx);
-                subDiPlusSeries.setData(dmiRes.diPlus);
-                subDiMinusSeries.setData(dmiRes.diMinus);
+                inst.series.adx.setData(dmiRes.adx);
+                inst.series.diPlus.setData(dmiRes.diPlus);
+                inst.series.diMinus.setData(dmiRes.diMinus);
             }
         }
+    }
+
+    function updateAllSubPanes(passedState = null) {
+        const s = passedState || get(state);
+        paneInstances.forEach((inst, key) => {
+            updateSinglePaneData(key, inst, s);
+        });
     }
 
     onMount(() => {
@@ -409,12 +386,14 @@
                     height: chartContainer.clientHeight,
                 });
             }
-            if (subChartContainer && subChart) {
-                subChart.applyOptions({
-                    width: subChartContainer.clientWidth,
-                    height: subChartContainer.clientHeight,
-                });
-            }
+            paneInstances.forEach((inst) => {
+                if (inst.node && inst.chart) {
+                    inst.chart.applyOptions({
+                        width: inst.node.clientWidth,
+                        height: inst.node.clientHeight,
+                    });
+                }
+            });
         };
         window.addEventListener("resize", handleResize);
 
@@ -431,9 +410,6 @@
                 }, 120);
             }
         });
-
-        // Initialize sub-chart pane
-        setTimeout(initSubChart, 100);
 
         // Track previous candle and timeframe state
         let initialDataLoaded = false;
@@ -486,11 +462,11 @@
                         to: n + 8,
                     };
                     chart.timeScale().setVisibleLogicalRange(targetRange);
-                    if (subChart) {
-                        subChart.timeScale().setVisibleLogicalRange(targetRange);
-                    }
+                    paneInstances.forEach((inst) => {
+                        try { inst.chart.timeScale().setVisibleLogicalRange(targetRange); } catch (e) {}
+                    });
                 }
-                updateSubChartData();
+                updateAllSubPanes(s);
             } else if (prevEarliestTime !== null && s.candles[0].time < prevEarliestTime) {
                 candleSeries.setData(s.candles);
                 volumeSeries.setData(
@@ -515,10 +491,10 @@
                 );
                 prevCandlesCount = s.candles.length;
                 prevEarliestTime = s.candles[0].time;
-                updateSubChartData();
+                updateAllSubPanes(s);
             } else {
                 candleSeries.setData(s.candles);
-                updateSubChartData();
+                updateAllSubPanes(s);
             }
 
             // Visual primitives
@@ -586,64 +562,28 @@
             window.removeEventListener("resize", handleResize);
             unsubscribe();
             unsubscribePriceLines();
-            destroySubChart();
+            paneInstances.forEach((inst) => {
+                try { inst.chart.remove(); } catch (e) {}
+            });
+            paneInstances.clear();
             chart.remove();
         };
     });
 </script>
 
 <div class="flex-1 flex flex-col h-full overflow-hidden bg-bg relative min-w-0">
-    <!-- Top Floating Toolbar: Indicator Sub-Pane Toggles -->
-    <div class="absolute top-3 left-4 z-30 flex items-center gap-1.5 bg-black/70 backdrop-blur-md p-1 rounded-lg border border-border/50 shadow-2xl">
-        <button 
-            on:click={() => switchSubPane("CVD")}
-            class="px-2.5 py-1 text-[9px] font-bold rounded transition-all {activeSubPane === 'CVD' ? 'bg-accent text-white shadow' : 'text-slate-400 hover:text-white'}"
-            title="Cumulative Volume Delta (CVD Flow & 2σ Bands)"
-        >
-            ⚡ CVD FLOW
-        </button>
-        <button 
-            on:click={() => switchSubPane("Z_SCORE")}
-            class="px-2.5 py-1 text-[9px] font-bold rounded transition-all {activeSubPane === 'Z_SCORE' ? 'bg-cyan-600 text-white shadow' : 'text-slate-400 hover:text-white'}"
-            title="Anchored CVD Z-Score Series (±2σ Breakout Bands)"
-        >
-            🌊 Z-SCORE
-        </button>
-        <button 
-            on:click={() => switchSubPane("DER")}
-            class="px-2.5 py-1 text-[9px] font-bold rounded transition-all {activeSubPane === 'DER' ? 'bg-indigo-600 text-white shadow' : 'text-slate-400 hover:text-white'}"
-            title="Delta Efficiency Ratio ($ Price Delta / Delta Volume)"
-        >
-            ⚡ DER
-        </button>
-        <button 
-            on:click={() => switchSubPane("FRAGILITY")}
-            class="px-2.5 py-1 text-[9px] font-bold rounded transition-all {activeSubPane === 'FRAGILITY' ? 'bg-rose-600 text-white shadow' : 'text-slate-400 hover:text-white'}"
-            title="Liquidity Fragility Index (Ψ = Price Impact / Vol)"
-        >
-            🛡️ FRAGILITY
-        </button>
-        <button 
-            on:click={() => switchSubPane("RSI")}
-            class="px-2.5 py-1 text-[9px] font-bold rounded transition-all {activeSubPane === 'RSI' ? 'bg-purple-600 text-white shadow' : 'text-slate-400 hover:text-white'}"
-            title="Relative Strength Index (RSI 14)"
-        >
-            📊 RSI (14)
-        </button>
-        <button 
-            on:click={() => switchSubPane("MACD")}
-            class="px-2.5 py-1 text-[9px] font-bold rounded transition-all {activeSubPane === 'MACD' ? 'bg-sky-600 text-white shadow' : 'text-slate-400 hover:text-white'}"
-            title="Moving Average Convergence Divergence (MACD 12,26,9)"
-        >
-            🌊 MACD
-        </button>
-        <button 
-            on:click={() => switchSubPane("ADX")}
-            class="px-2.5 py-1 text-[9px] font-bold rounded transition-all {activeSubPane === 'ADX' ? 'bg-amber-600 text-white shadow' : 'text-slate-400 hover:text-white'}"
-            title="Average Directional Index & DMI (+DI / -DI)"
-        >
-            📈 ADX / DMI
-        </button>
+    <!-- Top Floating Toolbar: Multi-Indicator Sub-Pane Toggles -->
+    <div class="absolute top-3 left-4 z-30 flex items-center gap-1.5 bg-black/75 backdrop-blur-md p-1 rounded-lg border border-border/50 shadow-2xl">
+        {#each Object.entries(SUB_PANE_DEFS) as [key, def]}
+            <button 
+                on:click={() => toggleSubPane(key)}
+                class="px-2.5 py-1 text-[9px] font-bold rounded transition-all flex items-center gap-1.5 {activeSubPanes.includes(key) ? `${def.color} text-white shadow-lg ring-1 ring-white/30` : 'text-slate-400 hover:text-white bg-white/5'}"
+                title={def.label}
+            >
+                <i class="fas {def.icon} text-[8.5px]"></i>
+                <span>{def.title}</span>
+            </button>
+        {/each}
     </div>
 
     <!-- Main Candlestick Chart (Flexible Height) -->
@@ -725,21 +665,27 @@
         {/if}
     </div>
 
-    <!-- Synchronized Sub-Indicator Pane -->
-    {#if activeSubPane !== "VOL"}
-        <div class="h-44 w-full border-t border-border/60 bg-[#080b0e] relative flex flex-col">
-            <div class="absolute top-1.5 left-3 text-[9px] font-mono text-slate-400 pointer-events-none flex items-center gap-3 z-10">
-                <span class="font-bold text-white uppercase tracking-wider">
-                    {#if activeSubPane === 'CVD'}
-                        ⚡ CVD OSCILLATOR & FLOW BANDS (±2σ)
-                    {:else if activeSubPane === 'RSI'}
-                        📊 RSI (14) OSCILLATOR [OB: 70 | OS: 30]
-                    {:else if activeSubPane === 'MACD'}
-                        🌊 MACD (12, 26, 9) [MACD, SIGNAL, HISTOGRAM]
-                    {/if}
-                </span>
-            </div>
-            <div bind:this={subChartContainer} class="flex-1 w-full"></div>
+    <!-- Synchronized Multi-Indicator Panes Area -->
+    {#if activeSubPanes.length > 0}
+        <div class="flex flex-col border-t border-border/60 bg-[#080b0e] overflow-y-auto max-h-[48vh] divide-y divide-border/30">
+            {#each activeSubPanes as paneKey (paneKey)}
+                {@const def = SUB_PANE_DEFS[paneKey]}
+                <div class="h-36 w-full relative flex flex-col shrink-0">
+                    <div class="absolute top-1.5 left-3 right-3 text-[9px] font-mono text-slate-400 flex justify-between items-center z-10 pointer-events-none">
+                        <span class="font-bold text-white uppercase tracking-wider flex items-center gap-2">
+                            {def ? def.label : paneKey}
+                        </span>
+                        <button
+                            on:click={() => toggleSubPane(paneKey)}
+                            class="text-slate-500 hover:text-rose-400 p-1 transition-colors pointer-events-auto cursor-pointer"
+                            title="Close pane"
+                        >
+                            <i class="fas fa-times text-xs"></i>
+                        </button>
+                    </div>
+                    <div use:initSubPaneAction={paneKey} class="flex-1 w-full"></div>
+                </div>
+            {/each}
         </div>
     {/if}
 </div>

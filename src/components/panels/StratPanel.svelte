@@ -82,35 +82,41 @@
             </div>
         </div>
 
-        <div class="space-y-2">
-            <div class="flex gap-2">
+        <div class="space-y-2.5">
+            <div>
+                <label class="text-[8px] text-slate-500 font-bold uppercase mb-1 block">Strategy Algorithm</label>
                 <select
                     bind:value={selectedStrat}
-                    class="bg-panel border border-border text-white text-xs rounded p-2 flex-1 focus:border-accent outline-none font-mono"
+                    class="w-full bg-panel border border-border/80 text-white text-xs rounded-lg p-2.5 focus:border-accent outline-none font-mono cursor-pointer"
                 >
+                    <optgroup label="Multi-Factor Confluence Engines">
+                        <option value="crypto_pro">👑 CRYPTO SMART PRO v2 (Confluence + Retest)</option>
+                    </optgroup>
                     <optgroup label="Rule-Based Quantitative Models">
                         <option value="standard">EMA Trend Follower (50/200)</option>
                         <option value="scalp">Divergence Momentum Scalp</option>
                         <option value="reversal">Liquidity Sweep Mean-Reversion</option>
                         <option value="breakout">Volatility Compression Breakout</option>
                     </optgroup>
-                    <optgroup label="Multi-Factor Confluence Engines">
-                        <option value="crypto_pro">👑 CRYPTO SMART PRO v2 (Confluence + Retest)</option>
-                    </optgroup>
                 </select>
+            </div>
+
+            <div class="flex gap-2">
                 <button
                     on:click={runBacktest}
-                    class="bg-accent hover:bg-accent/80 text-white p-2 rounded flex items-center justify-center transition-all shadow-lg shadow-accent/20"
-                    title="Run Strategy"
+                    class="flex-1 bg-accent hover:bg-accent/80 text-white font-bold text-xs py-2 px-3 rounded-lg flex items-center justify-center gap-2 transition-all shadow-lg shadow-accent/20 cursor-pointer"
+                    title="Run Strategy Backtest"
                 >
                     <i class="fas fa-play text-[10px]"></i>
+                    <span class="tracking-wider">RUN BACKTEST</span>
                 </button>
                 <button
                     on:click={runOpt}
-                    class="bg-strat hover:bg-strat/80 text-white p-2 rounded flex items-center justify-center transition-all shadow-lg shadow-strat/20"
-                    title="Run Optimizer"
+                    class="bg-strat/80 hover:bg-strat text-white text-xs py-2 px-3 rounded-lg flex items-center justify-center gap-1.5 transition-all shadow-lg shadow-strat/20 cursor-pointer"
+                    title="Run Parameter Optimizer"
                 >
                     <i class="fas fa-microchip text-[10px]"></i>
+                    <span class="text-[10px] font-bold">OPT</span>
                 </button>
             </div>
         </div>
