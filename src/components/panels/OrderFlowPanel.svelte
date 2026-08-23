@@ -1,4 +1,4 @@
-﻿<script>
+<script>
     import { onMount } from "svelte";
     import { state, APP } from "../../lib/stores/app.js";
     import { setCvdAnchor, manualRefresh } from "../../lib/logic/app_controller.js";
@@ -32,8 +32,8 @@
     $: currentAnchor = $state.cvdAnchor || 'daily';
 
     // Calculate aggregated bid vs ask depth percentage for imbalance meter
-    $: bidNotional = bookDepthData ? bookDepthData.filter(d => d.percentage < 0).reduce((acc, v) => acc + (v.notional_med || 0), 0) : 0;
-    $: askNotional = bookDepthData ? bookDepthData.filter(d => d.percentage > 0).reduce((acc, v) => acc + (v.notional_med || 0), 0) : 0;
+    $: bidNotional = bookDepthData ? bookDepthData.filter(d => d.percentage < 0).reduce((acc, v) => acc + (v.notional_med ?? v['CAST(notional_med AS FLOAT)'] ?? 0), 0) : 0;
+    $: askNotional = bookDepthData ? bookDepthData.filter(d => d.percentage > 0).reduce((acc, v) => acc + (v.notional_med ?? v['CAST(notional_med AS FLOAT)'] ?? 0), 0) : 0;
     $: totalDepthNotional = bidNotional + askNotional;
     $: bidPct = totalDepthNotional > 0 ? (bidNotional / totalDepthNotional * 100).toFixed(1) : 50.0;
     $: askPct = totalDepthNotional > 0 ? (askNotional / totalDepthNotional * 100).toFixed(1) : 50.0;
@@ -198,16 +198,18 @@
                 <div class="space-y-1.5 pt-1">
                     <span class="text-[8.5px] font-bold uppercase text-slate-500 block">Notional Depth by Range</span>
                     <div class="space-y-1">
-                        {#each bookDepthData.slice(0, 6) as level}
+                        {#each bookDepthData.slice(0, 12) as level}
+                            {@const notional = level.notional_med ?? level['CAST(notional_med AS FLOAT)'] ?? 0}
+                            {@const depth = level.depth_med ?? level['CAST(depth_med AS FLOAT)'] ?? 0}
                             <div class="flex justify-between items-center text-[9px] font-mono bg-panel/40 px-2 py-1 rounded border border-border/20">
                                 <span class="{level.percentage < 0 ? 'text-bull' : 'text-bear'} font-bold">
                                     {level.percentage > 0 ? '+' : ''}{level.percentage}%
                                 </span>
                                 <span class="text-slate-300">
-                                    ${((level.notional_med || 0) / 1e6).toFixed(1)}M
+                                    ${(notional / 1e6).toFixed(1)}M
                                 </span>
                                 <span class="text-slate-500 text-[8px]">
-                                    {(level.depth_med || 0).toFixed(0)} BTC
+                                    {depth.toFixed(0)} BTC
                                 </span>
                             </div>
                         {/each}

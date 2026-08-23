@@ -1,4 +1,4 @@
-<script>
+﻿<script>
     import { onMount, onDestroy } from "svelte";
     import { createChart, CrosshairMode } from "lightweight-charts";
     import { state, APP } from "../lib/stores/app.js";
@@ -8,24 +8,34 @@
         LinearRegressionPrimitive,
     } from "../lib/logic/chart_utils.js";
     import { getTradeMarkers } from "../lib/logic/replay.js";
+    import { calculateRSI, calculateMACD } from "../lib/logic/indicators.js";
 
     let chartContainer;
+    let subChartContainer;
     let chart;
+    let subChart;
     let candleSeries;
     let volumeSeries;
     let deltaSeries;
     let entryLine, tpLine, slLine;
 
+    // Sub-pane series
+    let subCvdSeries, subSmaSeries, subUpperBand, subLowerBand;
+    let subRsiSeries, subRsiOb, subRsiOs, subRsiMid;
+    let subMacdSeries, subSigSeries, subHistSeries;
+
+    let activeSubPane = "CVD"; // "CVD", "RSI", "MACD", "VOL"
+
     function clearPriceLines() {
-        if (entryLine) {
+        if (entryLine && candleSeries) {
             candleSeries.removePriceLine(entryLine);
             entryLine = null;
         }
-        if (tpLine) {
+        if (tpLine && candleSeries) {
             candleSeries.removePriceLine(tpLine);
             tpLine = null;
         }
-        if (slLine) {
+        if (slLine && candleSeries) {
             candleSeries.removePriceLine(slLine);
             slLine = null;
         }
@@ -66,6 +76,168 @@
     let boxPrimitive = new BoxPrimitive();
     let trendPrimitive = new TrendLinePrimitive();
     let regPrimitive = new LinearRegressionPrimitive();
+
+    function initSubChart() {
+        if (!subChartContainer || subChart) return;
+
+        subChart = createChart(subChartContainer, {
+            layout: {
+                background: { type: "solid", color: "#080b0e" },
+                textColor: "#94a3b8",
+                fontFamily: "JetBrains Mono",
+            },
+            grid: {
+                vertLines: { color: "#131722" },
+                horzLines: { color: "#131722" },
+            },
+            crosshair: { mode: CrosshairMode.Normal },
+            timeScale: {
+                borderColor: "#242b3b",
+                timeVisible: true,
+                secondsVisible: false,
+                visible: true,
+            },
+            rightPriceScale: { 
+                borderColor: "#242b3b",
+                scaleMargins: { top: 0.15, bottom: 0.15 }
+            },
+        });
+
+        // TimeScale 1-to-1 sync
+        chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+            if (subChart && range) {
+                subChart.timeScale().setVisibleLogicalRange(range);
+            }
+        });
+        subChart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+            if (chart && range) {
+                chart.timeScale().setVisibleLogicalRange(range);
+            }
+        });
+
+        updateSubChartData();
+    }
+
+    function destroySubChart() {
+        if (subChart) {
+            subChart.remove();
+            subChart = null;
+            subCvdSeries = null;
+            subSmaSeries = null;
+            subUpperBand = null;
+            subLowerBand = null;
+            subRsiSeries = null;
+            subMacdSeries = null;
+            subSigSeries = null;
+            subHistSeries = null;
+        }
+    }
+
+    function switchSubPane(mode) {
+        activeSubPane = mode;
+        destroySubChart();
+        if (mode !== "VOL") {
+            setTimeout(initSubChart, 50);
+        }
+    }
+
+    function updateSubChartData() {
+        if (!subChart) return;
+        let s = {};
+        state.update(curr => { s = curr; return curr; });
+        const candles = s.candles || [];
+        if (candles.length === 0) return;
+
+        if (activeSubPane === "CVD") {
+            const cvdPoints = s.cvdData?.points || [];
+            if (cvdPoints.length > 0) {
+                if (!subCvdSeries) {
+                    subCvdSeries = subChart.addAreaSeries({
+                        topColor: "rgba(59, 130, 246, 0.4)",
+                        bottomColor: "rgba(59, 130, 246, 0.0)",
+                        lineColor: "#3b82f6",
+                        lineWidth: 2,
+                        title: "CVD",
+                    });
+                    subSmaSeries = subChart.addLineSeries({
+                        color: "#f59e0b",
+                        lineWidth: 1.5,
+                        title: "SMA 20",
+                    });
+                    subUpperBand = subChart.addLineSeries({
+                        color: "rgba(239, 68, 68, 0.5)",
+                        lineWidth: 1,
+                        lineStyle: 2,
+                        title: "+2σ",
+                    });
+                    subLowerBand = subChart.addLineSeries({
+                        color: "rgba(34, 197, 94, 0.5)",
+                        lineWidth: 1,
+                        lineStyle: 2,
+                        title: "-2σ",
+                    });
+                }
+                subCvdSeries.setData(cvdPoints.map(p => ({ time: p.time, value: p.cvd })));
+                subSmaSeries.setData(cvdPoints.map(p => ({ time: p.time, value: p.cvd_sma })));
+                subUpperBand.setData(cvdPoints.map(p => ({ time: p.time, value: p.upper_band })));
+                subLowerBand.setData(cvdPoints.map(p => ({ time: p.time, value: p.lower_band })));
+            }
+        } else if (activeSubPane === "RSI") {
+            const rsiData = calculateRSI(candles, 14);
+            if (rsiData.length > 0) {
+                if (!subRsiSeries) {
+                    subRsiSeries = subChart.addLineSeries({
+                        color: "#a855f7",
+                        lineWidth: 2,
+                        title: "RSI 14",
+                    });
+                    subRsiOb = subChart.addLineSeries({
+                        color: "rgba(244, 63, 94, 0.6)",
+                        lineWidth: 1,
+                        lineStyle: 2,
+                        title: "OB (70)",
+                    });
+                    subRsiOs = subChart.addLineSeries({
+                        color: "rgba(16, 185, 129, 0.6)",
+                        lineWidth: 1,
+                        lineStyle: 2,
+                        title: "OS (30)",
+                    });
+                    subRsiMid = subChart.addLineSeries({
+                        color: "rgba(148, 163, 184, 0.3)",
+                        lineWidth: 1,
+                        lineStyle: 1,
+                    });
+                }
+                subRsiSeries.setData(rsiData);
+                subRsiOb.setData(rsiData.map(r => ({ time: r.time, value: 70 })));
+                subRsiOs.setData(rsiData.map(r => ({ time: r.time, value: 30 })));
+                subRsiMid.setData(rsiData.map(r => ({ time: r.time, value: 50 })));
+            }
+        } else if (activeSubPane === "MACD") {
+            const macdRes = calculateMACD(candles, 12, 26, 9);
+            if (macdRes.macd.length > 0) {
+                if (!subMacdSeries) {
+                    subMacdSeries = subChart.addLineSeries({
+                        color: "#38bdf8",
+                        lineWidth: 1.5,
+                        title: "MACD",
+                    });
+                    subSigSeries = subChart.addLineSeries({
+                        color: "#fb923c",
+                        lineWidth: 1.5,
+                        title: "Signal",
+                    });
+                    subHistSeries = subChart.addHistogramSeries({
+                        title: "Hist",
+                    });
+                }
+                subMacdSeries.setData(macdRes.macd);
+                subSigSeries.setData(macdRes.signal);
+                subHistSeries.setData(macdRes.hist);
+            }
+        }
+    }
 
     onMount(() => {
         chart = createChart(chartContainer, {
@@ -116,10 +288,18 @@
         candleSeries.attachPrimitive(regPrimitive);
 
         const handleResize = () => {
-            chart.applyOptions({
-                width: chartContainer.clientWidth,
-                height: chartContainer.clientHeight,
-            });
+            if (chartContainer && chart) {
+                chart.applyOptions({
+                    width: chartContainer.clientWidth,
+                    height: chartContainer.clientHeight,
+                });
+            }
+            if (subChartContainer && subChart) {
+                subChart.applyOptions({
+                    width: subChartContainer.clientWidth,
+                    height: subChartContainer.clientHeight,
+                });
+            }
         };
         window.addEventListener("resize", handleResize);
 
@@ -136,6 +316,9 @@
                 }, 120);
             }
         });
+
+        // Initialize sub-chart pane
+        setTimeout(initSubChart, 100);
 
         // Track previous candle and timeframe state
         let initialDataLoaded = false;
@@ -182,12 +365,8 @@
                 prevCandlesCount = s.candles.length;
                 prevEarliestTime = s.candles[0].time;
                 chart.timeScale().fitContent();
+                updateSubChartData();
             } else if (prevEarliestTime !== null && s.candles[0].time < prevEarliestTime) {
-                // Prepend event: historical candles added to the left
-                const addedCount = s.candles.length - prevCandlesCount;
-                const timeScale = chart.timeScale();
-                const logicalRange = timeScale.getVisibleLogicalRange();
-
                 candleSeries.setData(s.candles);
                 volumeSeries.setData(
                     s.candles.map((c) => ({
@@ -209,60 +388,17 @@
                                 : "rgba(248, 113, 113, 0.8)",
                     })),
                 );
-
-                // Offset viewport smoothly to prevent visual jumping
-                if (logicalRange && addedCount > 0) {
-                    timeScale.setVisibleLogicalRange({
-                        from: logicalRange.from + addedCount,
-                        to: logicalRange.to + addedCount,
-                    });
-                }
-
                 prevCandlesCount = s.candles.length;
                 prevEarliestTime = s.candles[0].time;
+                updateSubChartData();
             } else {
-                // Live real-time tick update
-                const lastCandle = s.candles[s.candles.length - 1];
-                candleSeries.update(lastCandle);
-                volumeSeries.update({
-                    time: lastCandle.time,
-                    value: lastCandle.volume,
-                    color:
-                        lastCandle.close >= lastCandle.open
-                            ? "rgba(8, 153, 129, 0.25)"
-                            : "rgba(242, 54, 69, 0.25)",
-                });
-                deltaSeries.update({
-                    time: lastCandle.time,
-                    value: Math.abs(lastCandle.delta || 0),
-                    color:
-                        (lastCandle.delta || 0) >= 0
-                            ? "rgba(34, 197, 94, 0.8)"
-                            : "rgba(248, 113, 113, 0.8)",
-                });
-                prevCandlesCount = s.candles.length;
-                prevEarliestTime = s.candles[0].time;
+                candleSeries.setData(s.candles);
+                updateSubChartData();
             }
 
-            // Update primitives based on active mode
-            if (s.isReplayMode) {
-                // We'll calculate replay visuals if needed, but for now we just show what's relevant to the trade
-                // Actually replay.js provides markers, but we should also show the OB/FVG/Lines of that trade
-            }
-
+            // Visual primitives
             if (s.activeMode === "zones") {
-                const filterStatus =
-                    s.activeZoneTab === "active" ? "ACTIVE" : "MITIGATED";
-                boxPrimitive.setData(
-                    (s.zones || [])
-                        .filter(
-                            (z) =>
-                                z.status === filterStatus &&
-                                ((s.showFVG && z.label === "FVG") ||
-                                    (s.showOB && z.label === "OB")),
-                        )
-                        .slice(-s.zoneLimit),
-                );
+                boxPrimitive.setData(s.zones || []);
                 trendPrimitive.setData([]);
                 regPrimitive.setData(null);
             } else if (s.activeMode === "lines") {
@@ -279,10 +415,10 @@
             } else if (
                 s.activeMode === "strat" ||
                 s.activeMode === "trades" ||
-                s.activeMode === "pnl"
+                s.activeMode === "pnl" ||
+                s.activeMode === "orderflow"
             ) {
                 if (s.isReplayMode && s.selectedTrade) {
-                    // Show zones associated with this specific trade
                     const t = s.selectedTrade;
                     const boxes = [];
                     if (t.savedOB) boxes.push(t.savedOB);
@@ -304,7 +440,7 @@
 
             // Replay Markers
             if (s.isReplayMode && s.selectedTrade) {
-                const markers = getTradeMarkers(s.selectedTrade); // Fixed to use top-level import
+                const markers = getTradeMarkers(s.selectedTrade);
                 candleSeries.setMarkers(markers);
             } else if (candleSeries) {
                 candleSeries.setMarkers([]);
@@ -328,47 +464,96 @@
             window.removeEventListener("resize", handleResize);
             unsubscribe();
             unsubscribePriceLines();
+            destroySubChart();
             chart.remove();
         };
     });
 </script>
 
-<div bind:this={chartContainer} class="chart-container relative">
-    {#if $state.isReplayMode}
-        <div
-            class="absolute top-4 left-1/2 -translate-x-1/2 bg-accent/90 backdrop-blur px-4 py-2 rounded-full border border-white/20 shadow-2xl flex items-center space-x-3 group cursor-pointer z-50"
+<div class="flex-1 flex flex-col h-full overflow-hidden bg-bg relative min-w-0">
+    <!-- Top Floating Toolbar: Indicator Sub-Pane Toggles -->
+    <div class="absolute top-3 left-4 z-30 flex items-center gap-1.5 bg-black/70 backdrop-blur-md p-1 rounded-lg border border-border/50 shadow-2xl">
+        <button 
+            on:click={() => switchSubPane("CVD")}
+            class="px-2.5 py-1 text-[9px] font-bold rounded transition-all {activeSubPane === 'CVD' ? 'bg-accent text-white shadow' : 'text-slate-400 hover:text-white'}"
+            title="Cumulative Volume Delta (CVD Flow & 2σ Bands)"
         >
-            <div class="flex items-center space-x-2">
-                <span class="w-2 h-2 rounded-full bg-white animate-pulse"
-                ></span>
-                <span
-                    class="text-[10px] font-bold text-white uppercase tracking-wider"
-                    >Historical Replay Mode</span
-                >
-            </div>
-            <div class="h-3 w-[1px] bg-white/30"></div>
-            <button
-                on:click={() =>
-                    state.update((s) => ({ ...s, isReplayMode: false }))}
-                class="text-[9px] text-white/80 font-bold uppercase hover:text-white"
-                >Exit View</button
-            >
-        </div>
-    {/if}
+            ⚡ CVD FLOW
+        </button>
+        <button 
+            on:click={() => switchSubPane("RSI")}
+            class="px-2.5 py-1 text-[9px] font-bold rounded transition-all {activeSubPane === 'RSI' ? 'bg-purple-600 text-white shadow' : 'text-slate-400 hover:text-white'}"
+            title="Relative Strength Index (RSI 14)"
+        >
+            📊 RSI (14)
+        </button>
+        <button 
+            on:click={() => switchSubPane("MACD")}
+            class="px-2.5 py-1 text-[9px] font-bold rounded transition-all {activeSubPane === 'MACD' ? 'bg-cyan-600 text-white shadow' : 'text-slate-400 hover:text-white'}"
+            title="Moving Average Convergence Divergence (MACD 12,26,9)"
+        >
+            🌊 MACD
+        </button>
+        <button 
+            on:click={() => switchSubPane("VOL")}
+            class="px-2.5 py-1 text-[9px] font-bold rounded transition-all {activeSubPane === 'VOL' ? 'bg-slate-700 text-white shadow' : 'text-slate-400 hover:text-white'}"
+            title="Standard Volume Histogram"
+        >
+            📦 VOL/DELTA
+        </button>
+    </div>
 
-    {#if $state.isLoadingMore}
-        <div
-            class="absolute top-4 left-4 bg-black/80 backdrop-blur px-3 py-1.5 rounded-lg border border-accent/40 shadow-xl flex items-center space-x-2 z-40 text-accent text-[10px] font-mono animate-pulse"
-        >
-            <i class="fas fa-spinner fa-spin text-xs"></i>
-            <span>Loading older history...</span>
+    <!-- Main Candlestick Chart (Flexible Height) -->
+    <div bind:this={chartContainer} class="flex-1 w-full min-h-0 relative">
+        {#if $state.isReplayMode}
+            <div
+                class="absolute top-4 left-1/2 -translate-x-1/2 bg-accent/90 backdrop-blur px-4 py-2 rounded-full border border-white/20 shadow-2xl flex items-center space-x-3 group cursor-pointer z-50"
+            >
+                <div class="flex items-center space-x-2">
+                    <span class="w-2 h-2 rounded-full bg-white animate-pulse"></span>
+                    <span class="text-[10px] font-bold text-white uppercase tracking-wider">
+                        Historical Replay Mode
+                    </span>
+                </div>
+                <div class="h-3 w-[1px] bg-white/30"></div>
+                <button
+                    on:click={() => state.update((s) => ({ ...s, isReplayMode: false }))}
+                    class="text-[9px] text-white/80 font-bold uppercase hover:text-white"
+                >
+                    Exit View
+                </button>
+            </div>
+        {/if}
+
+        {#if $state.isLoadingMore}
+            <div
+                class="absolute top-4 right-4 bg-black/80 backdrop-blur px-3 py-1.5 rounded-lg border border-accent/40 shadow-xl flex items-center space-x-2 z-40 text-accent text-[10px] font-mono animate-pulse"
+            >
+                <i class="fas fa-spinner fa-spin text-xs"></i>
+                <span>Loading older history...</span>
+            </div>
+        {/if}
+    </div>
+
+    <!-- Synchronized Sub-Indicator Pane -->
+    {#if activeSubPane !== "VOL"}
+        <div class="h-44 w-full border-t border-border/60 bg-[#080b0e] relative flex flex-col">
+            <div class="absolute top-1.5 left-3 text-[9px] font-mono text-slate-400 pointer-events-none flex items-center gap-3 z-10">
+                <span class="font-bold text-white uppercase tracking-wider">
+                    {#if activeSubPane === 'CVD'}
+                        ⚡ CVD OSCILLATOR & FLOW BANDS (±2σ)
+                    {:else if activeSubPane === 'RSI'}
+                        📊 RSI (14) OSCILLATOR [OB: 70 | OS: 30]
+                    {:else if activeSubPane === 'MACD'}
+                        🌊 MACD (12, 26, 9) [MACD, SIGNAL, HISTOGRAM]
+                    {/if}
+                </span>
+            </div>
+            <div bind:this={subChartContainer} class="flex-1 w-full"></div>
         </div>
     {/if}
 </div>
 
 <style>
-    .chart-container {
-        width: 100%;
-        height: 100%;
-    }
+    /* Chart container responsive styling */
 </style>

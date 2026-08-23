@@ -249,3 +249,67 @@ export function calculateTrendLines(candles, config = {}) {
 
     return [...filteredActive, ...filteredBroken];
 }
+
+export function calculateRSI(candles, period = 14) {
+    if (!candles || candles.length <= period) return [];
+    let gains = 0, losses = 0;
+    for (let i = 1; i <= period; i++) {
+        const change = candles[i].close - candles[i - 1].close;
+        if (change >= 0) gains += change;
+        else losses += -change;
+    }
+    let avgGain = gains / period;
+    let avgLoss = losses / period;
+    const res = [];
+    
+    for (let i = period; i < candles.length; i++) {
+        if (i > period) {
+            const change = candles[i].close - candles[i - 1].close;
+            const gain = change > 0 ? change : 0;
+            const loss = change < 0 ? -change : 0;
+            avgGain = (avgGain * (period - 1) + gain) / period;
+            avgLoss = (avgLoss * (period - 1) + loss) / period;
+        }
+        const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+        const rsi = avgLoss === 0 ? 100 : (100 - (100 / (1 + rs)));
+        res.push({ time: candles[i].time, value: rsi });
+    }
+    return res;
+}
+
+export function calculateMACD(candles, fast = 12, slow = 26, signal = 9) {
+    if (!candles || candles.length <= slow + signal) return { macd: [], signal: [], hist: [] };
+    const kFast = 2 / (fast + 1);
+    const kSlow = 2 / (slow + 1);
+    let emaFast = candles[0].close;
+    let emaSlow = candles[0].close;
+    
+    const macdLine = [];
+    for (let i = 0; i < candles.length; i++) {
+        emaFast = candles[i].close * kFast + emaFast * (1 - kFast);
+        emaSlow = candles[i].close * kSlow + emaSlow * (1 - kSlow);
+        if (i >= slow - 1) {
+            macdLine.push({ time: candles[i].time, value: emaFast - emaSlow });
+        }
+    }
+    
+    const kSig = 2 / (signal + 1);
+    let emaSig = macdLine.length > 0 ? macdLine[0].value : 0;
+    const macdRes = [];
+    const sigRes = [];
+    const histRes = [];
+    
+    for (let i = 0; i < macdLine.length; i++) {
+        emaSig = macdLine[i].value * kSig + emaSig * (1 - kSig);
+        if (i >= signal - 1) {
+            macdRes.push(macdLine[i]);
+            sigRes.push({ time: macdLine[i].time, value: emaSig });
+            histRes.push({
+                time: macdLine[i].time,
+                value: macdLine[i].value - emaSig,
+                color: (macdLine[i].value - emaSig) >= 0 ? 'rgba(34, 197, 94, 0.7)' : 'rgba(239, 68, 68, 0.7)'
+            });
+        }
+    }
+    return { macd: macdRes, signal: sigRes, hist: histRes };
+}

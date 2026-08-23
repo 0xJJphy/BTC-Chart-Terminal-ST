@@ -327,14 +327,14 @@ export async function handleApiRequest(req, res) {
                         SELECT 
                             date,
                             percentage,
-                            notional_med::FLOAT,
-                            notional_p10::FLOAT,
-                            notional_p90::FLOAT,
-                            depth_med::FLOAT,
-                            n_snapshots::BIGINT
+                            notional_med::FLOAT as notional_med,
+                            notional_p10::FLOAT as notional_p10,
+                            notional_p90::FLOAT as notional_p90,
+                            depth_med::FLOAT as depth_med,
+                            n_snapshots::BIGINT as n_snapshots
                         FROM '${depthFile}'
-                        ORDER BY date DESC, percentage ASC
-                        LIMIT 50
+                        WHERE date = (SELECT MAX(date) FROM '${depthFile}')
+                        ORDER BY percentage ASC
                     `;
                     const rows = await queryDuck(duckSql);
                     if (rows && rows.length > 0) {
