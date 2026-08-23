@@ -207,28 +207,35 @@ export class TradeExecutionRenderer {
 
             const entryVal = t.entry !== undefined ? Number(t.entry) : null;
             const slVal = t.sl !== undefined ? Number(t.sl) : null;
-            const initialSL = (t.initial_sl !== undefined && t.initial_sl !== null)
+            const isLong = (t.type === 'LONG' || t.trade_type === 'LONG' || t.tradeType === 'LONG');
+
+            let initialSL = (t.initial_sl !== undefined && t.initial_sl !== null)
                 ? Number(t.initial_sl)
                 : ((t.initialSl !== undefined && t.initialSl !== null)
                     ? Number(t.initialSl)
                     : slVal);
 
-            const isLong = (t.type === 'LONG' || t.trade_type === 'LONG' || t.tradeType === 'LONG');
-            const riskDist = (entryVal !== null && initialSL !== null) ? Math.abs(entryVal - initialSL) : 0;
+            // If initial SL was recorded equal to entry (BE), reconstruct the true 1R risk level
+            if (entryVal !== null && (!initialSL || Math.abs(initialSL - entryVal) < 1.0)) {
+                const fallbackRisk = (t.tp1 !== undefined && t.tp1 !== null) ? Math.abs(Number(t.tp1) - entryVal) : (entryVal * 0.015);
+                initialSL = isLong ? (entryVal - fallbackRisk) : (entryVal + fallbackRisk);
+            }
+
+            const riskDist = (entryVal !== null && initialSL !== null) ? Math.abs(entryVal - initialSL) : (entryVal * 0.015);
 
             const tp1Val = (t.tp1 !== undefined && t.tp1 !== null)
                 ? Number(t.tp1)
                 : ((t.tp !== undefined && t.tp !== null)
                     ? Number(t.tp)
-                    : (entryVal && riskDist ? (isLong ? entryVal + riskDist * 1.0 : entryVal - riskDist * 1.0) : null));
+                    : (entryVal ? (isLong ? entryVal + riskDist * 1.0 : entryVal - riskDist * 1.0) : null));
 
-            const tp2Val = (t.tp2 !== undefined && t.tp2 !== null)
+            const tp2Val = (t.tp2 !== undefined && t.tp2 !== null && Math.abs(Number(t.tp2) - (entryVal || 0)) > 1.0)
                 ? Number(t.tp2)
-                : (entryVal && riskDist ? (isLong ? entryVal + riskDist * 2.0 : entryVal - riskDist * 2.0) : null);
+                : (entryVal ? (isLong ? entryVal + riskDist * 2.0 : entryVal - riskDist * 2.0) : null);
 
-            const tp3Val = (t.tp3 !== undefined && t.tp3 !== null)
+            const tp3Val = (t.tp3 !== undefined && t.tp3 !== null && Math.abs(Number(t.tp3) - (entryVal || 0)) > 1.0)
                 ? Number(t.tp3)
-                : (entryVal && riskDist ? (isLong ? entryVal + riskDist * 3.0 : entryVal - riskDist * 3.0) : null);
+                : (entryVal ? (isLong ? entryVal + riskDist * 3.0 : entryVal - riskDist * 3.0) : null);
 
             const yEntry = entryVal !== null ? series.priceToCoordinate(entryVal) : null;
             const ySL = slVal !== null ? series.priceToCoordinate(slVal) : null;
@@ -359,9 +366,9 @@ export class TradeExecutionRenderer {
                 ctx.lineTo(endX, effYEnt);
                 ctx.stroke();
 
-                // Stop Loss Handling (Initial SL + Trailing BE)
+                // Stop Loss Handling (Yellow/Amber stepped transition line)
                 if (hasTrailingBE) {
-                    // 1. Initial SL segment before TP1
+                    // 1. Initial SL segment before TP1 (Red)
                     ctx.strokeStyle = '#f23645';
                     ctx.lineWidth = 2.4 * pixelRatio;
                     ctx.beginPath();
@@ -369,17 +376,19 @@ export class TradeExecutionRenderer {
                     ctx.lineTo(effXTP1, effYInitSL);
                     ctx.stroke();
 
-                    // 2. Trailing step transition to Break-Even at TP1
-                    ctx.save();
-                    ctx.setLineDash([4 * pixelRatio, 4 * pixelRatio]);
-                    ctx.strokeStyle = '#f59e0b';
-                    ctx.lineWidth = 1.8 * pixelRatio;
+                    // 2. Vertical step up from Initial SL to Break-Even at TP1 hit (Yellow)
+                    ctx.strokeStyle = '#eab308';
+                    ctx.lineWidth = 2.4 * pixelRatio;
                     ctx.beginPath();
                     ctx.moveTo(effXTP1, effYInitSL);
                     ctx.lineTo(effXTP1, effYEnt);
+                    ctx.stroke();
+
+                    // 3. Trailing Break-Even segment from TP1 hit to Exit (Yellow)
+                    ctx.beginPath();
+                    ctx.moveTo(effXTP1, effYEnt);
                     ctx.lineTo(endX, effYEnt);
                     ctx.stroke();
-                    ctx.restore();
                 } else if (yInitSL !== null) {
                     // Standard SL line
                     ctx.strokeStyle = '#f23645';

@@ -365,12 +365,12 @@
                 <div class="flex flex-col">
                     <div class="flex items-center gap-2">
                         <span
-                            class="text-[9px] font-bold {res.type === 'LONG'
-                                ? 'text-bull'
-                                : 'text-bear'}"
+                            class="text-[9px] font-bold {res.status === 'BE' || res.desc?.includes('BE')
+                                ? 'text-amber-400'
+                                : (res.status === 'WIN' || res.pnl > 0 ? 'text-bull' : 'text-bear')}"
                         >
                             {res.type}
-                            {res.outcome || res.status}
+                            {res.status === 'BE' || res.desc?.includes('BE') ? 'BE' : (res.outcome || res.status)}
                         </span>
                         <span class="text-[9px] text-slate-500 font-mono">
                             {new Date(res.time * 1000).toLocaleDateString()}
@@ -382,14 +382,14 @@
                 </div>
                 <div class="text-right">
                     <div
-                        class="text-xs font-mono font-bold {res.pnl > 0
-                            ? 'text-bull'
-                            : 'text-bear'}"
+                        class="text-xs font-mono font-bold {res.status === 'BE' || res.desc?.includes('BE')
+                            ? 'text-amber-400'
+                            : (res.pnl > 0 ? 'text-bull' : 'text-bear')}"
                     >
                         {res.pnl > 0 ? "+" : ""}{res.pnl.toFixed(2)}R
                     </div>
                     <div class="text-[8px] text-slate-500">
-                        Score: {res.setupScore?.toFixed(0) || 0}
+                        Score: {res.setupScore?.toFixed(0) || res.setup_score?.toFixed(0) || (res.dashboardSnapshot?.strengthLong ? Math.max(res.dashboardSnapshot.strengthLong, res.dashboardSnapshot.strengthShort).toFixed(0) : (res.score || 70))}
                     </div>
                 </div>
             </div>

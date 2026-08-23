@@ -364,18 +364,18 @@ pub fn analyze_crypto_pro(candles: &[Candle], config: &CryptoProConfig) -> Crypt
             }
 
             if trade_closed {
-                let (is_win, pnl_r) = if exit_reason == "TP3" {
-                    (true, 1.75)
+                let (status_str, is_win, pnl_r) = if exit_reason == "TP3" {
+                    ("WIN".to_string(), true, 1.75)
                 } else if exit_reason == "BE (SL After TP)" {
-                    if active_tp2_reached { (true, 1.00) } else { (true, 0.50) }
+                    if active_tp2_reached { ("WIN".to_string(), true, 1.00) } else { ("BE".to_string(), true, 0.50) }
                 } else {
-                    (false, -1.00)
+                    ("LOSS".to_string(), false, -1.00)
                 };
 
                 trades.push(Trade {
                     id: format!("PRO-{}", trade_id_counter),
                     trade_type: active_trade_side.to_string(),
-                    status: if is_win { "WIN".to_string() } else { "LOSS".to_string() },
+                    status: status_str,
                     entry: active_entry,
                     sl: active_initial_sl,
                     tp: active_tp2,
