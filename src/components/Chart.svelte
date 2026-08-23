@@ -220,41 +220,41 @@
             if (derData.length > 0) {
                 if (!subDerHist) {
                     subDerHist = subChart.addHistogramSeries({
-                        title: "DER ($/Δ)",
+                        title: "DER Norm (Eficiencia)",
                     });
                     subDerHighThresh = subChart.addLineSeries({
                         color: "rgba(16, 185, 129, 0.7)",
                         lineWidth: 1,
                         lineStyle: 2,
-                        title: "Alta Eficiencia (5.0)",
+                        title: "Alta Eficiencia (1.8)",
                     });
                     subDerLowThresh = subChart.addLineSeries({
                         color: "rgba(244, 63, 94, 0.7)",
                         lineWidth: 1,
                         lineStyle: 2,
-                        title: "Absorción Pasiva (1.0)",
+                        title: "Absorción Pasiva (0.6)",
                     });
                 }
                 subDerHist.setData(derData);
-                subDerHighThresh.setData(derData.map(d => ({ time: d.time, value: 5.0 })));
-                subDerLowThresh.setData(derData.map(d => ({ time: d.time, value: 1.0 })));
+                subDerHighThresh.setData(derData.map(d => ({ time: d.time, value: 1.8 })));
+                subDerLowThresh.setData(derData.map(d => ({ time: d.time, value: 0.6 })));
             }
         } else if (activeSubPane === "FRAGILITY") {
             const fragData = calculateFragility(candles, 20);
             if (fragData.length > 0) {
                 if (!subFragilityHist) {
                     subFragilityHist = subChart.addHistogramSeries({
-                        title: "Fragilidad (Ψ)",
+                        title: "Fragilidad Norm (Ψ)",
                     });
                     subFragilityWarning = subChart.addLineSeries({
                         color: "rgba(239, 68, 68, 0.7)",
                         lineWidth: 1,
                         lineStyle: 2,
-                        title: "Alerta Vacío (100)",
+                        title: "Alerta Vacío (2.2)",
                     });
                 }
                 subFragilityHist.setData(fragData);
-                subFragilityWarning.setData(fragData.map(f => ({ time: f.time, value: 100 })));
+                subFragilityWarning.setData(fragData.map(f => ({ time: f.time, value: 2.2 })));
             }
         } else if (activeSubPane === "VOL") {
             const volData = calculateVolumeDelta(candles, 20);
@@ -486,7 +486,17 @@
                 initialDataLoaded = true;
                 prevCandlesCount = s.candles.length;
                 prevEarliestTime = s.candles[0].time;
-                chart.timeScale().fitContent();
+                const n = s.candles.length;
+                if (n > 0) {
+                    const targetRange = {
+                        from: Math.max(0, n - 130),
+                        to: n + 8,
+                    };
+                    chart.timeScale().setVisibleLogicalRange(targetRange);
+                    if (subChart) {
+                        subChart.timeScale().setVisibleLogicalRange(targetRange);
+                    }
+                }
                 updateSubChartData();
             } else if (prevEarliestTime !== null && s.candles[0].time < prevEarliestTime) {
                 candleSeries.setData(s.candles);

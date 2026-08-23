@@ -447,32 +447,76 @@ export function calculateAnchoredCVD(candles, anchorPeriod = 'daily', smaPeriod 
 }
 
 /**
- * Calculates Delta Efficiency Ratio (DER = Price Displacement / Cum Delta)
+ * Calculates Scale-Invariant Normalized Delta Efficiency Ratio (DER)
+ * Dimensionless efficiency ratio: (Price Displacement / Expected ATR Move) / (Cumulative Delta / Average Delta)
  */
 export function calculateDER(candles, period = 14) {
-    if (!candles || candles.length < period) return [];
+    if (!candles || candles.length < period * 2) return [];
+    const n = candles.length;
     const res = [];
 
-    for (let i = period; i < candles.length; i++) {
-        const pDist = Math.abs(candles[i].close - candles[i - period].close);
-        let cumDelta = 0;
+    // 1. Calculate ATR (14)
+    const tr = new Float64Array(n);
+    for (let i = 1; i < n; i++) {
+        const c = candles[i];
+        const prevC = candles[i - 1].close;
+        tr[i] = Math.max(c.high - c.low, Math.abs(c.high - prevC), Math.abs(c.low - prevC));
+    }
 
-        for (let k = i - period + 1; k <= i; k++) {
-            const c = candles[k];
-            const vol = c.volume || 1;
-            const delta = c.delta !== undefined && c.delta !== null 
-                ? Math.abs(c.delta) 
-                : ((c.buyVolume !== undefined && c.sellVolume !== undefined) 
-                    ? Math.abs(c.buyVolume - c.sellVolume) 
-                    : vol * 0.25);
-            cumDelta += delta;
+    const atr = new Float64Array(n);
+    let sumTr = 0;
+    for (let i = 1; i <= period; i++) sumTr += tr[i];
+    atr[period] = sumTr / period;
+    for (let i = period + 1; i < n; i++) {
+        atr[i] = (atr[i - 1] * (period - 1) + tr[i]) / period;
+    }
+
+    // 2. Extract Delta per bar
+    const deltas = new Float64Array(n);
+    for (let i = 0; i < n; i++) {
+        const c = candles[i];
+        const vol = c.volume || 1;
+        deltas[i] = c.delta !== undefined && c.delta !== null 
+            ? Math.abs(c.delta) 
+            : ((c.buyVolume !== undefined && c.sellVolume !== undefined) 
+                ? Math.abs(c.buyVolume - c.sellVolume) 
+                : vol * 0.25);
+    }
+
+    // 3. Rolling Average Delta (50 period)
+    const avgDelta = new Float64Array(n);
+    let sumDelta = 0;
+    const avgPeriod = 50;
+    for (let i = 0; i < n; i++) {
+        sumDelta += deltas[i];
+        if (i >= avgPeriod) {
+            sumDelta -= deltas[i - avgPeriod];
+            avgDelta[i] = sumDelta / avgPeriod;
+        } else {
+            avgDelta[i] = sumDelta / (i + 1);
         }
+    }
 
-        const der = pDist / Math.max(0.001, cumDelta);
+    for (let i = period * 2; i < n; i++) {
+        const pDist = Math.abs(candles[i].close - candles[i - period].close);
+        const expectedPMove = Math.max(0.01, (atr[i] || 1) * Math.sqrt(period));
+
+        let cumDelta = 0;
+        for (let k = i - period + 1; k <= i; k++) {
+            cumDelta += deltas[k];
+        }
+        const expectedDelta = Math.max(0.01, (avgDelta[i] || 1) * period);
+
+        const normPMove = pDist / expectedPMove;
+        const normDelta = cumDelta / expectedDelta;
+
+        const derNorm = normPMove / Math.max(0.05, normDelta);
+        const rounded = Math.round(derNorm * 100) / 100;
+
         res.push({
             time: candles[i].time,
-            value: der,
-            color: der >= 5.0 ? '#10b981' : (der <= 1.0 ? '#f43f5e' : '#38bdf8')
+            value: rounded,
+            color: rounded >= 1.8 ? '#10b981' : (rounded <= 0.6 ? '#f43f5e' : '#38bdf8')
         });
     }
 
@@ -480,30 +524,62 @@ export function calculateDER(candles, period = 14) {
 }
 
 /**
- * Calculates Liquidity Fragility Index (Psi = Price Return / Relative Volume)
+ * Calculates Scale-Invariant Normalized Liquidity Fragility Index (Psi)
+ * Dimensionless ratio: (Bar Range / ATR) / (Volume / AvgVolume)
  */
 export function calculateFragility(candles, period = 20) {
-    if (!candles || candles.length < period) return [];
+    if (!candles || candles.length < period * 2) return [];
+    const n = candles.length;
     const res = [];
 
-    // Calculate moving average volume
-    let sumVol = 0;
-    for (let i = 0; i < candles.length; i++) {
-        sumVol += (candles[i].volume || 1);
-        if (i >= period) {
-            sumVol -= (candles[i - period].volume || 1);
-            const avgVol = Math.max(0.001, sumVol / period);
-            const c = candles[i];
-            const returnPct = Math.abs((c.high - c.low) / Math.max(1, c.close)) * 1000;
-            const relVol = Math.max(0.01, (c.volume || 1) / avgVol);
-            const fragility = (returnPct / relVol);
+    // 1. Calculate ATR (20)
+    const tr = new Float64Array(n);
+    for (let i = 1; i < n; i++) {
+        const c = candles[i];
+        const prevC = candles[i - 1].close;
+        tr[i] = Math.max(c.high - c.low, Math.abs(c.high - prevC), Math.abs(c.low - prevC));
+    }
 
-            res.push({
-                time: c.time,
-                value: fragility,
-                color: fragility >= 100 ? '#f43f5e' : (fragility >= 50 ? '#fb923c' : '#38bdf8')
-            });
+    const atr = new Float64Array(n);
+    let sumTr = 0;
+    for (let i = 1; i <= period; i++) sumTr += tr[i];
+    atr[period] = sumTr / period;
+    for (let i = period + 1; i < n; i++) {
+        atr[i] = (atr[i - 1] * (period - 1) + tr[i]) / period;
+    }
+
+    // 2. Average Volume (50 period)
+    const avgVol = new Float64Array(n);
+    let sumVol = 0;
+    const avgPeriod = 50;
+    for (let i = 0; i < n; i++) {
+        sumVol += (candles[i].volume || 1);
+        if (i >= avgPeriod) {
+            sumVol -= (candles[i - avgPeriod].volume || 1);
+            avgVol[i] = sumVol / avgPeriod;
+        } else {
+            avgVol[i] = sumVol / (i + 1);
         }
+    }
+
+    for (let i = period; i < n; i++) {
+        const c = candles[i];
+        const barRange = Math.max(0.001, c.high - c.low);
+        const currAtr = Math.max(0.001, atr[i] || barRange);
+        const normRange = barRange / currAtr;
+
+        const vol = Math.max(0.001, c.volume || 1);
+        const baselineVol = Math.max(0.001, avgVol[i]);
+        const normVol = vol / baselineVol;
+
+        const fragilityNorm = normRange / Math.max(0.05, normVol);
+        const rounded = Math.round(fragilityNorm * 100) / 100;
+
+        res.push({
+            time: c.time,
+            value: rounded,
+            color: rounded >= 2.2 ? '#f43f5e' : (rounded >= 1.4 ? '#fb923c' : '#38bdf8')
+        });
     }
 
     return res;
