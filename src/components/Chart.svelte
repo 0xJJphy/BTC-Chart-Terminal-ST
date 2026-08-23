@@ -9,6 +9,7 @@
         LinearRegressionPrimitive,
         TradeExecutionPrimitive,
     } from "../lib/logic/chart_utils.js";
+    import { getTradeMarkers } from "../lib/logic/replay.js";
     import {
         calculateRSI,
         calculateMACD,
@@ -197,78 +198,15 @@
             });
         } else if (paneKey === "Z_SCORE") {
             inst.series.hist = sc.addHistogramSeries({ title: "CVD Z-Score" });
-            inst.series.hist.createPriceLine({
-                price: 2.0,
-                color: "rgba(16, 185, 129, 0.8)",
-                lineWidth: 1,
-                lineStyle: 2,
-                lineVisible: false,
-                axisLabelVisible: true,
-                title: "+2σ Exp",
-            });
-            inst.series.hist.createPriceLine({
-                price: -2.0,
-                color: "rgba(244, 63, 94, 0.8)",
-                lineWidth: 1,
-                lineStyle: 2,
-                lineVisible: false,
-                axisLabelVisible: true,
-                title: "-2σ Comp",
-            });
         } else if (paneKey === "DER") {
             inst.series.hist = sc.addHistogramSeries({ title: "DER Norm" });
-            inst.series.hist.createPriceLine({
-                price: 1.8,
-                color: "rgba(16, 185, 129, 0.8)",
-                lineWidth: 1,
-                lineStyle: 2,
-                lineVisible: false,
-                axisLabelVisible: true,
-                title: "Alta Eficiencia (1.8)",
-            });
-            inst.series.hist.createPriceLine({
-                price: 0.6,
-                color: "rgba(244, 63, 94, 0.8)",
-                lineWidth: 1,
-                lineStyle: 2,
-                lineVisible: false,
-                axisLabelVisible: true,
-                title: "Absorción (0.6)",
-            });
         } else if (paneKey === "FRAGILITY") {
             inst.series.hist = sc.addHistogramSeries({ title: "Fragilidad (Ψ)" });
-            inst.series.hist.createPriceLine({
-                price: 2.2,
-                color: "rgba(239, 68, 68, 0.8)",
-                lineWidth: 1,
-                lineStyle: 2,
-                lineVisible: false,
-                axisLabelVisible: true,
-                title: "Vacío Liq (2.2)",
-            });
         } else if (paneKey === "RSI") {
             inst.series.rsi = sc.addLineSeries({
                 color: "#a855f7",
                 lineWidth: 2,
                 title: "RSI 14",
-            });
-            inst.series.rsi.createPriceLine({
-                price: 70,
-                color: "rgba(244, 63, 94, 0.8)",
-                lineWidth: 1,
-                lineStyle: 2,
-                lineVisible: false,
-                axisLabelVisible: true,
-                title: "OB (70)",
-            });
-            inst.series.rsi.createPriceLine({
-                price: 30,
-                color: "rgba(16, 185, 129, 0.8)",
-                lineWidth: 1,
-                lineStyle: 2,
-                lineVisible: false,
-                axisLabelVisible: true,
-                title: "OS (30)",
             });
         } else if (paneKey === "MACD") {
             inst.series.macd = sc.addLineSeries({ color: "#38bdf8", lineWidth: 1.5, title: "MACD" });
@@ -278,15 +216,6 @@
             inst.series.adx = sc.addLineSeries({ color: "#eab308", lineWidth: 2, title: "ADX" });
             inst.series.diPlus = sc.addLineSeries({ color: "#10b981", lineWidth: 1.5, title: "+DI" });
             inst.series.diMinus = sc.addLineSeries({ color: "#f43f5e", lineWidth: 1.5, title: "-DI" });
-            inst.series.adx.createPriceLine({
-                price: 25,
-                color: "rgba(255, 255, 255, 0.8)",
-                lineWidth: 1,
-                lineStyle: 2,
-                lineVisible: false,
-                axisLabelVisible: true,
-                title: "Trend (25)",
-            });
         }
     }
 

@@ -301,6 +301,10 @@ export class TradeExecutionRenderer {
             const w = endX - startX;
 
             if (w > 0 && yEntry !== null) {
+                const effYEnt = yEntry * pixelRatio;
+                const effYSL = ySL !== null ? ySL * pixelRatio : effYEnt;
+                const effYTP = yTP1 !== null ? yTP1 * pixelRatio : effYEnt;
+
                 const initialSL = (t.initial_sl !== undefined && t.initial_sl !== null)
                     ? Number(t.initial_sl)
                     : ((t.initialSl !== undefined && t.initialSl !== null)
