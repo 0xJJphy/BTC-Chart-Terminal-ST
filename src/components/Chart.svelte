@@ -572,6 +572,8 @@
         let prevCandlesCount = 0;
         let prevEarliestTime = null;
         let currentActiveInterval = APP.interval;
+        let prevIsReplayMode = false;
+        let prevSelectedTrade = null;
 
         // Subscribe to state changes
         const unsubscribe = state.subscribe((s) => {
@@ -588,8 +590,69 @@
                 return;
             }
 
-            // Check if timeframe switched or first load
-            if (APP.interval !== currentActiveInterval || !initialDataLoaded) {
+            const enteringReplay = s.isReplayMode && s.selectedTrade && (!prevIsReplayMode || s.selectedTrade !== prevSelectedTrade);
+            const exitingReplay = prevIsReplayMode && !s.isReplayMode;
+            prevIsReplayMode = s.isReplayMode;
+            prevSelectedTrade = s.selectedTrade;
+
+            if (enteringReplay) {
+                candleSeries.setData(s.candles);
+                volumeSeries.setData(
+                    s.candles.map((c) => ({
+                        time: c.time,
+                        value: c.volume,
+                        color: c.close >= c.open ? "rgba(8, 153, 129, 0.25)" : "rgba(242, 54, 69, 0.25)",
+                    })),
+                );
+                deltaSeries.setData(
+                    s.candles.map((c) => ({
+                        time: c.time,
+                        value: Math.abs(c.delta || 0),
+                        color: (c.delta || 0) >= 0 ? "rgba(34, 197, 94, 0.8)" : "rgba(248, 113, 113, 0.8)",
+                    })),
+                );
+                updateAllSubPanes(s);
+
+                const tTime = Number(s.selectedTrade.entryTime || s.selectedTrade.entry_time || s.selectedTrade.time);
+                let tradeIdx = s.candles.findIndex((c) => c.time >= tTime);
+                if (tradeIdx === -1) tradeIdx = Math.floor(s.candles.length / 2);
+
+                const replayRange = {
+                    from: Math.max(0, tradeIdx - 35),
+                    to: Math.min(s.candles.length - 1, tradeIdx + 45),
+                };
+                chart.timeScale().setVisibleLogicalRange(replayRange);
+                paneInstances.forEach((inst) => {
+                    try { inst.chart.timeScale().setVisibleLogicalRange(replayRange); } catch (e) {}
+                });
+            } else if (exitingReplay) {
+                candleSeries.setData(s.candles);
+                volumeSeries.setData(
+                    s.candles.map((c) => ({
+                        time: c.time,
+                        value: c.volume,
+                        color: c.close >= c.open ? "rgba(8, 153, 129, 0.25)" : "rgba(242, 54, 69, 0.25)",
+                    })),
+                );
+                deltaSeries.setData(
+                    s.candles.map((c) => ({
+                        time: c.time,
+                        value: Math.abs(c.delta || 0),
+                        color: (c.delta || 0) >= 0 ? "rgba(34, 197, 94, 0.8)" : "rgba(248, 113, 113, 0.8)",
+                    })),
+                );
+                updateAllSubPanes(s);
+
+                const n = s.candles.length;
+                const liveRange = {
+                    from: Math.max(0, n - 130),
+                    to: n + 8,
+                };
+                chart.timeScale().setVisibleLogicalRange(liveRange);
+                paneInstances.forEach((inst) => {
+                    try { inst.chart.timeScale().setVisibleLogicalRange(liveRange); } catch (e) {}
+                });
+            } else if (APP.interval !== currentActiveInterval || !initialDataLoaded) {
                 currentActiveInterval = APP.interval;
                 candleSeries.setData(s.candles);
                 volumeSeries.setData(

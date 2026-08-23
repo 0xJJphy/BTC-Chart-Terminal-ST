@@ -197,43 +197,56 @@ export class TradeExecutionRenderer {
             const toSec = (val) => {
                 if (!val) return null;
                 const num = Number(val);
-                if (isNaN(num)) return null;
+                if (isNaN(num) || num <= 0) return null;
                 return num > 1e11 ? Math.floor(num / 1000) : Math.floor(num);
             };
 
-            const tSignal = toSec(t.signalTime || t.time);
-            const tEntry = toSec(t.entryTime || t.time);
-            const tExit = toSec(t.exitTime || (tEntry ? tEntry + 3600 * 4 : null));
+            const tSignal = toSec(t.signalTime || t.signal_time || t.time);
+            const tEntry = toSec(t.entryTime || t.entry_time || t.time);
+            const tExit = toSec(t.exitTime || t.exit_time || (tEntry ? tEntry + 3600 * 4 : null));
 
-            const yEntry = series.priceToCoordinate(t.entry);
-            const ySL = series.priceToCoordinate(t.sl);
-            const yTP1 = (t.tp1 || t.tp) ? series.priceToCoordinate(t.tp1 || t.tp) : null;
-            const yTP2 = t.tp2 ? series.priceToCoordinate(t.tp2) : null;
-            const yTP3 = t.tp3 ? series.priceToCoordinate(t.tp3) : null;
+            const entryVal = t.entry !== undefined ? Number(t.entry) : null;
+            const slVal = t.sl !== undefined ? Number(t.sl) : null;
+            const tp1Val = (t.tp1 !== undefined && t.tp1 !== null) ? Number(t.tp1) : ((t.tp !== undefined && t.tp !== null) ? Number(t.tp) : null);
+            const tp2Val = (t.tp2 !== undefined && t.tp2 !== null) ? Number(t.tp2) : null;
+            const tp3Val = (t.tp3 !== undefined && t.tp3 !== null) ? Number(t.tp3) : null;
+
+            const yEntry = entryVal !== null ? series.priceToCoordinate(entryVal) : null;
+            const ySL = slVal !== null ? series.priceToCoordinate(slVal) : null;
+            const yTP1 = tp1Val !== null ? series.priceToCoordinate(tp1Val) : null;
+            const yTP2 = tp2Val !== null ? series.priceToCoordinate(tp2Val) : null;
+            const yTP3 = tp3Val !== null ? series.priceToCoordinate(tp3Val) : null;
 
             if (yEntry === null && ySL === null) return;
 
-            const rawXSignal = tSignal ? timeScale.timeToCoordinate(tSignal) : null;
-            const rawXEntry = tEntry ? timeScale.timeToCoordinate(tEntry) : null;
-            const rawXExit = tExit ? timeScale.timeToCoordinate(tExit) : null;
+            const getCoord = (timeSec) => {
+                if (!timeSec) return null;
+                const c = timeScale.timeToCoordinate(timeSec);
+                return (c !== null && !isNaN(c)) ? c : null;
+            };
+
+            const rawXSignal = getCoord(tSignal);
+            const rawXEntry = getCoord(tEntry);
+            const rawXExit = getCoord(tExit);
 
             // 1. S/R Confluence Line (if present for this setup)
-            const srLevel = t.srLevel || t.sr_level;
+            const srLevel = t.srLevel !== undefined && t.srLevel !== null ? Number(t.srLevel) : (t.sr_level !== undefined && t.sr_level !== null ? Number(t.sr_level) : null);
             const srTime = toSec(t.srTime || t.sr_time);
             const srType = t.srType || t.sr_type || (t.type === 'LONG' ? 'SUPPORT' : 'RESISTANCE');
-            if (srLevel !== undefined && srLevel !== null) {
+            if (srLevel !== null && !isNaN(srLevel)) {
                 const ySR = series.priceToCoordinate(srLevel);
                 if (ySR !== null) {
-                    const rawXSR = srTime ? timeScale.timeToCoordinate(srTime) : null;
-                    const startSR = Math.max(0, rawXSR !== null ? rawXSR : (rawXSignal !== null ? rawXSignal - 80 : (rawXEntry !== null ? rawXEntry - 80 : 0))) * pixelRatio;
-                    const endSR = Math.min(scope.mediaSize.width, rawXExit !== null ? rawXExit : scope.mediaSize.width) * pixelRatio;
+                    const rawXSR = getCoord(srTime);
+                    const defaultStart = rawXSignal !== null ? rawXSignal - 80 : (rawXEntry !== null ? rawXEntry - 80 : scope.mediaSize.width * 0.1);
+                    const startSR = Math.max(0, rawXSR !== null ? rawXSR : defaultStart) * pixelRatio;
+                    const endSR = Math.min(scope.mediaSize.width, rawXExit !== null ? rawXExit : (rawXEntry !== null ? rawXEntry + 180 : scope.mediaSize.width * 0.9)) * pixelRatio;
                     const effYSR = ySR * pixelRatio;
 
                     if (endSR > startSR) {
                         ctx.save();
                         ctx.setLineDash([6 * pixelRatio, 4 * pixelRatio]);
-                        ctx.strokeStyle = srType === 'SUPPORT' ? 'rgba(6, 182, 212, 0.85)' : 'rgba(244, 63, 94, 0.85)';
-                        ctx.lineWidth = 1.8 * pixelRatio;
+                        ctx.strokeStyle = srType === 'SUPPORT' ? 'rgba(6, 182, 212, 0.9)' : 'rgba(244, 63, 94, 0.9)';
+                        ctx.lineWidth = 2 * pixelRatio;
                         ctx.beginPath();
                         ctx.moveTo(startSR, effYSR);
                         ctx.lineTo(endSR, effYSR);
@@ -241,8 +254,8 @@ export class TradeExecutionRenderer {
 
                         // Label
                         ctx.fillStyle = srType === 'SUPPORT' ? '#06b6d4' : '#f43f5e';
-                        ctx.font = `bold ${Math.round(9 * pixelRatio)}px "JetBrains Mono", monospace`;
-                        ctx.fillText(`${srType} CONFLUENCE: $${srLevel.toFixed(1)}`, startSR + 6 * pixelRatio, effYSR - 4 * pixelRatio);
+                        ctx.font = `bold ${Math.round(9.5 * pixelRatio)}px "JetBrains Mono", monospace`;
+                        ctx.fillText(`${srType} CONFLUENCE: $${srLevel.toFixed(1)}`, startSR + 6 * pixelRatio, effYSR - 5 * pixelRatio);
                         ctx.restore();
                     }
                 }
@@ -264,7 +277,6 @@ export class TradeExecutionRenderer {
                     ctx.lineTo(effXEnt, effYEnt);
                     ctx.stroke();
 
-                    // Fill light yellow area
                     if (ySL !== null) {
                         ctx.fillStyle = 'rgba(234, 179, 8, 0.08)';
                         const topY = Math.min(yEntry, ySL) * pixelRatio;
@@ -280,8 +292,9 @@ export class TradeExecutionRenderer {
             }
 
             // 3. Active Trade Execution Phase (from entry to exit)
-            const effX1 = rawXEntry !== null ? rawXEntry : 0;
-            const effX2 = rawXExit !== null ? rawXExit : scope.mediaSize.width;
+            const fallbackX1 = rawXSignal !== null ? rawXSignal : scope.mediaSize.width * 0.25;
+            const effX1 = rawXEntry !== null ? rawXEntry : fallbackX1;
+            const effX2 = rawXExit !== null ? rawXExit : (effX1 + 160);
 
             const startX = Math.max(0, effX1) * pixelRatio;
             const endX = Math.min(scope.mediaSize.width, effX2) * pixelRatio;
@@ -294,7 +307,7 @@ export class TradeExecutionRenderer {
 
                 // Green Profit Area
                 if (yTP1 !== null) {
-                    ctx.fillStyle = 'rgba(8, 153, 129, 0.14)';
+                    ctx.fillStyle = 'rgba(8, 153, 129, 0.16)';
                     const topP = Math.min(effYEnt, effYTP);
                     const botP = Math.max(effYEnt, effYTP);
                     ctx.fillRect(startX, topP, w, botP - topP);
@@ -302,7 +315,7 @@ export class TradeExecutionRenderer {
 
                 // Red Risk Area
                 if (ySL !== null) {
-                    ctx.fillStyle = 'rgba(242, 54, 69, 0.14)';
+                    ctx.fillStyle = 'rgba(242, 54, 69, 0.16)';
                     const topR = Math.min(effYEnt, effYSL);
                     const botR = Math.max(effYEnt, effYSL);
                     ctx.fillRect(startX, topR, w, botR - topR);
@@ -310,7 +323,7 @@ export class TradeExecutionRenderer {
 
                 // Solid bounded Entry Line (Blue)
                 ctx.strokeStyle = '#2962ff';
-                ctx.lineWidth = 2.2 * pixelRatio;
+                ctx.lineWidth = 2.4 * pixelRatio;
                 ctx.beginPath();
                 ctx.moveTo(startX, effYEnt);
                 ctx.lineTo(endX, effYEnt);
@@ -319,7 +332,7 @@ export class TradeExecutionRenderer {
                 // Solid bounded SL Line (Red)
                 if (ySL !== null) {
                     ctx.strokeStyle = '#f23645';
-                    ctx.lineWidth = 2.2 * pixelRatio;
+                    ctx.lineWidth = 2.4 * pixelRatio;
                     ctx.beginPath();
                     ctx.moveTo(startX, effYSL);
                     ctx.lineTo(endX, effYSL);
@@ -329,27 +342,27 @@ export class TradeExecutionRenderer {
                 // Solid bounded TP1 Line (Green)
                 if (yTP1 !== null) {
                     ctx.strokeStyle = '#089981';
-                    ctx.lineWidth = 2.2 * pixelRatio;
+                    ctx.lineWidth = 2.4 * pixelRatio;
                     ctx.beginPath();
                     ctx.moveTo(startX, effYTP);
                     ctx.lineTo(endX, effYTP);
                     ctx.stroke();
                 }
 
-                // TP2 Line
+                // TP2 Line (Teal)
                 if (yTP2 !== null) {
                     ctx.strokeStyle = '#10b981';
-                    ctx.lineWidth = 1.6 * pixelRatio;
+                    ctx.lineWidth = 1.8 * pixelRatio;
                     ctx.beginPath();
                     ctx.moveTo(startX, yTP2 * pixelRatio);
                     ctx.lineTo(endX, yTP2 * pixelRatio);
                     ctx.stroke();
                 }
 
-                // TP3 Line
+                // TP3 Line (Emerald)
                 if (yTP3 !== null) {
                     ctx.strokeStyle = '#34d399';
-                    ctx.lineWidth = 1.6 * pixelRatio;
+                    ctx.lineWidth = 1.8 * pixelRatio;
                     ctx.beginPath();
                     ctx.moveTo(startX, yTP3 * pixelRatio);
                     ctx.lineTo(endX, yTP3 * pixelRatio);
@@ -357,27 +370,27 @@ export class TradeExecutionRenderer {
                 }
 
                 // Crisp Price Badge Labels on the Right
-                ctx.font = `bold ${Math.round(9 * pixelRatio)}px "JetBrains Mono", monospace`;
+                ctx.font = `bold ${Math.round(9.5 * pixelRatio)}px "JetBrains Mono", monospace`;
                 
                 ctx.fillStyle = '#60a5fa';
-                ctx.fillText(`ENTRY $${t.entry?.toFixed(1)}`, endX + 4 * pixelRatio, effYEnt + 3 * pixelRatio);
+                ctx.fillText(`ENTRY $${entryVal?.toFixed(1)}`, endX + 5 * pixelRatio, effYEnt + 3 * pixelRatio);
 
-                if (ySL !== null) {
+                if (ySL !== null && slVal !== null) {
                     ctx.fillStyle = '#f87171';
-                    ctx.fillText(`SL $${t.sl?.toFixed(1)}`, endX + 4 * pixelRatio, effYSL + 3 * pixelRatio);
+                    ctx.fillText(`SL $${slVal.toFixed(1)}`, endX + 5 * pixelRatio, effYSL + 3 * pixelRatio);
                 }
 
-                if (yTP1 !== null) {
+                if (yTP1 !== null && tp1Val !== null) {
                     ctx.fillStyle = '#34d399';
-                    ctx.fillText(`TP1 $${(t.tp1 || t.tp)?.toFixed(1)}`, endX + 4 * pixelRatio, effYTP + 3 * pixelRatio);
+                    ctx.fillText(`TP1 $${tp1Val.toFixed(1)}`, endX + 5 * pixelRatio, effYTP + 3 * pixelRatio);
                 }
-                if (yTP2 !== null && t.tp2) {
+                if (yTP2 !== null && tp2Val !== null) {
                     ctx.fillStyle = '#10b981';
-                    ctx.fillText(`TP2 $${t.tp2.toFixed(1)}`, endX + 4 * pixelRatio, yTP2 * pixelRatio + 3 * pixelRatio);
+                    ctx.fillText(`TP2 $${tp2Val.toFixed(1)}`, endX + 5 * pixelRatio, yTP2 * pixelRatio + 3 * pixelRatio);
                 }
-                if (yTP3 !== null && t.tp3) {
+                if (yTP3 !== null && tp3Val !== null) {
                     ctx.fillStyle = '#059669';
-                    ctx.fillText(`TP3 $${t.tp3.toFixed(1)}`, endX + 4 * pixelRatio, yTP3 * pixelRatio + 3 * pixelRatio);
+                    ctx.fillText(`TP3 $${tp3Val.toFixed(1)}`, endX + 5 * pixelRatio, yTP3 * pixelRatio + 3 * pixelRatio);
                 }
             }
         });

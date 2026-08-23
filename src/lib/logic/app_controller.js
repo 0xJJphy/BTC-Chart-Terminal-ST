@@ -593,48 +593,62 @@ export function applyOptimizerSelection(modeKey) {
 
 export async function replayTrade(trade) {
     if (!trade) return;
-    const tradeTime = trade.entryTime || trade.signalTime || trade.time;
+    const tradeTime = Number(trade.entryTime || trade.entry_time || trade.signalTime || trade.signal_time || trade.time);
 
-    // Always fetch or use complete history to slice candles perfectly centered around this trade
+    // Normalize trade fields so both camelCase and snake_case work everywhere
+    const normalizedTrade = {
+        ...trade,
+        entry: Number(trade.entry),
+        sl: Number(trade.sl),
+        tp: Number(trade.tp || trade.tp1),
+        tp1: (trade.tp1 !== undefined && trade.tp1 !== null) ? Number(trade.tp1) : Number(trade.tp),
+        tp2: (trade.tp2 !== undefined && trade.tp2 !== null) ? Number(trade.tp2) : null,
+        tp3: (trade.tp3 !== undefined && trade.tp3 !== null) ? Number(trade.tp3) : null,
+        time: tradeTime,
+        entryTime: Number(trade.entryTime || trade.entry_time || tradeTime),
+        signalTime: Number(trade.signalTime || trade.signal_time || tradeTime),
+        exitTime: Number(trade.exitTime || trade.exit_time || (tradeTime + 3600 * 4)),
+        srLevel: trade.srLevel !== undefined && trade.srLevel !== null ? Number(trade.srLevel) : (trade.sr_level !== undefined && trade.sr_level !== null ? Number(trade.sr_level) : null),
+        srTime: trade.srTime || trade.sr_time ? Number(trade.srTime || trade.sr_time) : null,
+        srType: trade.srType || trade.sr_type || (trade.type === 'LONG' ? 'SUPPORT' : 'RESISTANCE')
+    };
+
     const fullHistory = await getFullHistoricalCandles();
     if (fullHistory && fullHistory.length > 0) {
-        const idx = fullHistory.findIndex(c => c.time >= tradeTime);
-        if (idx !== -1) {
-            const startIdx = Math.max(0, idx - 120);
-            const endIdx = Math.min(fullHistory.length, idx + 80);
-            const replaySlice = fullHistory.slice(startIdx, endIdx);
-
-            state.update(s => ({
-                ...s,
-                liveCandlesBackup: s.liveCandlesBackup || s.candles,
-                candles: replaySlice,
-                isReplayMode: true,
-                selectedTrade: trade,
-                activeSubPanes: ['CVD', 'RSI', 'MACD', 'ADX']
-            }));
-
-            setTimeout(() => {
-                if (chartReference) {
-                    const replay = prepareReplayData(trade);
-                    zoomRange(chartReference, replay.zoomRange.from, replay.zoomRange.to);
+        let idx = fullHistory.findIndex(c => c.time >= tradeTime);
+        if (idx === -1) {
+            idx = 0;
+            let minDiff = Math.abs(fullHistory[0].time - tradeTime);
+            for (let i = 1; i < fullHistory.length; i++) {
+                const diff = Math.abs(fullHistory[i].time - tradeTime);
+                if (diff < minDiff) {
+                    minDiff = diff;
+                    idx = i;
                 }
-            }, 60);
-            return;
+            }
         }
+
+        const startIdx = Math.max(0, idx - 100);
+        const endIdx = Math.min(fullHistory.length, idx + 80);
+        const replaySlice = fullHistory.slice(startIdx, endIdx);
+
+        state.update(s => ({
+            ...s,
+            liveCandlesBackup: s.liveCandlesBackup || s.candles,
+            candles: replaySlice,
+            isReplayMode: true,
+            selectedTrade: normalizedTrade,
+            activeSubPanes: ['CVD', 'RSI', 'MACD', 'ADX']
+        }));
+        return;
     }
 
-    state.update(s => {
-        const replay = prepareReplayData(trade);
-        if (chartReference) {
-            zoomRange(chartReference, replay.zoomRange.from, replay.zoomRange.to);
-        }
-        return {
-            ...s,
-            isReplayMode: true,
-            selectedTrade: trade,
-            activeSubPanes: ['CVD', 'RSI', 'MACD', 'ADX']
-        };
-    });
+    state.update(s => ({
+        ...s,
+        isReplayMode: true,
+        selectedTrade: normalizedTrade,
+        activeSubPanes: ['CVD', 'RSI', 'MACD', 'ADX']
+    }));
 }
 
 export function exitReplay() {
