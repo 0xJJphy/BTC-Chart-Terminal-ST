@@ -33,6 +33,7 @@ async function ensureWasm() {
 let chartReference = null;
 let cachedFullHistory = null;
 let cachedFullHistorySymbol = null;
+let cachedFullHistoryInterval = null;
 
 export function setChartReference(chart) {
     chartReference = chart;
@@ -246,13 +247,13 @@ export async function loadOlderCandles() {
  * Retrieve full historical candle dataset (240k+ candles) for backtesting
  */
 export async function getFullHistoricalCandles() {
-    if (cachedFullHistory && cachedFullHistorySymbol === APP.symbol && cachedFullHistory.length > 10000) {
+    if (cachedFullHistory && cachedFullHistorySymbol === APP.symbol && cachedFullHistoryInterval === APP.interval && cachedFullHistory.length > 500) {
         return cachedFullHistory;
     }
 
-    addToLog(`Fetching complete multi-year history for backtest engine...`);
+    addToLog(`Fetching complete multi-year history for backtest engine (${APP.symbol} ${APP.interval})...`);
     try {
-        const res = await fetch(`/api/db/klines?symbol=${APP.symbol}&exchange=binance&limit=250000`);
+        const res = await fetch(`/api/db/klines?symbol=${APP.symbol}&exchange=binance&interval=${APP.interval}&limit=250000`);
         if (res.ok) {
             const data = await res.json();
             if (data && data.candles && data.candles.length > 0) {
@@ -270,7 +271,8 @@ export async function getFullHistoricalCandles() {
                 fullCandles.sort((a, b) => a.time - b.time);
                 cachedFullHistory = fullCandles;
                 cachedFullHistorySymbol = APP.symbol;
-                addToLog(`Cached full history: ${fullCandles.length} candles (2019-Present)`);
+                cachedFullHistoryInterval = APP.interval;
+                addToLog(`Cached full history: ${fullCandles.length} candles for ${APP.interval} backtesting`);
                 return fullCandles;
             }
         }
