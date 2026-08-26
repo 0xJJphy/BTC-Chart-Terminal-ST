@@ -1,181 +1,185 @@
 <script>
-    import { state, APP } from "../../lib/stores/app.js";
-    import {
-        replayTrade,
-        runSelectedStrategy,
-    } from "../../lib/logic/app_controller.js";
+    import { state } from "../../lib/stores/app.js";
+    import { replayTrade } from "../../lib/logic/app_controller.js";
 
-    function switchSubTab(tab) {
-        state.update((s) => ({ ...s, activeTradeTab: tab }));
+    let sortKey = "time";
+    let sortDir = -1;
+    let sideFilter = "ALL"; // ALL | LONG | SHORT
+    let resultFilter = "ALL"; // ALL | WIN | LOSS | BE
+
+    const COLUMNS = [
+        { key: "time", label: "Fecha", align: "left" },
+        { key: "type", label: "Lado", align: "left" },
+        { key: "pnl", label: "R", align: "right" },
+        { key: "pnlUsd", label: "PnL", align: "right" },
+        { key: "maeR", label: "MAE", align: "right", hint: "Máxima excursión adversa, en R" },
+        { key: "mfeR", label: "MFE", align: "right", hint: "Máxima excursión favorable, en R" },
+        { key: "costUsd", label: "Coste", align: "right", hint: "Fees + slippage + funding de este trade" },
+        { key: "barsHeld", label: "Velas", align: "right" },
+        { key: "setupScore", label: "Score", align: "right" },
+        { key: "exitReason", label: "Salida", align: "left" },
+    ];
+
+    function toggleSort(key) {
+        if (sortKey === key) sortDir = -sortDir;
+        else {
+            sortKey = key;
+            sortDir = -1;
+        }
     }
 
-    $: trades = $state.trades || [];
-    $: ideas = trades.filter((t) => t.status === "PENDING");
-    $: live = trades.filter((t) => t.status === "OPEN");
-    $: history = trades.filter(
-        (t) => t.status === "WIN" || t.status === "LOSS" || t.status === "BE",
+    function classify(t) {
+        if (t.pnlUsd > 0 || (t.pnlUsd == null && t.pnl > 0)) return "WIN";
+        if (t.pnlUsd < 0 || (t.pnlUsd == null && t.pnl < 0)) return "LOSS";
+        return "BE";
+    }
+
+    $: rows = ($state.trades || [])
+        .filter((t) => sideFilter === "ALL" || t.type === sideFilter)
+        .filter((t) => resultFilter === "ALL" || classify(t) === resultFilter)
+        .slice()
+        .sort((a, b) => {
+            const av = a[sortKey], bv = b[sortKey];
+            if (typeof av === "string" || typeof bv === "string") {
+                return String(av ?? "").localeCompare(String(bv ?? "")) * sortDir;
+            }
+            return ((av ?? 0) - (bv ?? 0)) * sortDir;
+        });
+
+    $: totals = rows.reduce(
+        (acc, t) => {
+            acc.r += t.pnl || 0;
+            acc.usd += t.pnlUsd || 0;
+            acc.cost += t.costUsd || 0;
+            return acc;
+        },
+        { r: 0, usd: 0, cost: 0 },
     );
+
+    const fmt = (v, d = 2) => (Number.isFinite(v) ? v.toFixed(d) : "—");
+    const money = (v, d = 2) =>
+        Number.isFinite(v) ? `${v < 0 ? "-" : ""}$${Math.abs(v).toFixed(d)}` : "—";
+    const date = (t) =>
+        Number.isFinite(t) ? new Date(t * 1000).toISOString().slice(2, 16).replace("T", " ") : "—";
+
+    /**
+     * CSV of the currently filtered and sorted rows. Built as a data URL and clicked from
+     * the user's own gesture, so no server round trip is involved.
+     */
+    function exportCsv() {
+        const header = [
+            "id", "type", "status", "exit_reason", "entry_time", "exit_time",
+            "entry", "initial_sl", "tp1", "tp2", "tp3",
+            "qty", "risk_usd", "pnl_r", "pnl_usd", "pnl_percent",
+            "cost_usd", "mae_r", "mfe_r", "bars_held", "setup_score", "equity_at_entry",
+        ];
+        const lines = [header.join(",")];
+        for (const t of rows) {
+            lines.push([
+                t.id, t.type, t.status, t.exitReason ?? "",
+                t.entryTime ?? t.time, t.exitTime ?? "",
+                t.entry, t.initialSl ?? t.sl, t.tp1 ?? "", t.tp2 ?? "", t.tp3 ?? "",
+                t.qty ?? "", t.riskUsd ?? "", t.pnl ?? "", t.pnlUsd ?? "", t.pnlPercent ?? "",
+                t.costUsd ?? "", t.maeR ?? "", t.mfeR ?? "", t.barsHeld ?? "",
+                t.setupScore ?? "", t.equityAtEntry ?? "",
+            ]
+                .map((v) => (typeof v === "string" && v.includes(",") ? `"${v}"` : v))
+                .join(","));
+        }
+
+        const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `trades_${new Date().toISOString().slice(0, 10)}.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
+    }
 </script>
 
-<div class="flex-1 flex flex-col">
-    <div class="p-4 border-b border-border bg-black/10">
-        <div class="flex justify-between items-center mb-4">
-            <div class="flex flex-col gap-2">
-                <h2
-                    class="text-white font-bold text-xs uppercase tracking-widest"
-                >
-                    Trade Terminal
-                </h2>
-                <select
-                    class="bg-black/40 border border-border/50 text-[10px] text-slate-300 rounded px-1 py-0.5 focus:outline-none focus:border-accent"
-                    value={$state.activeStrategy}
-                    on:change={(e) => runSelectedStrategy(e.target.value)}
-                >
-                    <option value="SMC">SMC ZONES</option>
-                    <option value="TL_TRAP">TL TRAP (2R)</option>
-                    <option value="TL_TRAP_AGRO">TL TRAP AGRO (3R)</option>
-                    <option value="TL_TRAP_ATR">TL TRAP ATR (2R)</option>
-                    <option value="TL_TRAP_ATR_AGRO"
-                        >TL TRAP ATR AGRO (3R)</option
-                    >
-                    <option value="TL_TRAP_ATR_PARTIAL_1"
-                        >TL PARTIAL (3R/5R)</option
-                    >
-                    <option value="TL_TRAP_ATR_PARTIAL_2"
-                        >TL PARTIAL (2R/4R)</option
-                    >
-                </select>
+<div class="flex-1 flex flex-col overflow-hidden">
+    <div class="p-3 border-b border-border bg-black/10 space-y-2.5">
+        <div class="flex justify-between items-center">
+            <h2 class="text-white font-bold text-xs uppercase tracking-widest">Operaciones</h2>
+            <button
+                on:click={exportCsv}
+                disabled={rows.length === 0}
+                class="text-[9px] text-accent hover:text-white disabled:opacity-30 uppercase font-bold transition-colors flex items-center gap-1"
+                title="Exportar las filas filtradas a CSV"
+            >
+                <i class="fas fa-file-csv text-[9px]"></i> CSV
+            </button>
+        </div>
+
+        <div class="flex gap-1.5">
+            <div class="flex rounded overflow-hidden border border-border/60">
+                {#each ["ALL", "LONG", "SHORT"] as f}
+                    <button
+                        on:click={() => (sideFilter = f)}
+                        class="px-2 py-1 text-[8px] font-bold uppercase transition-colors {sideFilter === f ? 'bg-accent text-white' : 'text-slate-500 hover:text-white'}"
+                    >{f === "ALL" ? "Todo" : f}</button>
+                {/each}
             </div>
-            <div class="flex items-center gap-1">
-                <div
-                    class="w-1.5 h-1.5 rounded-full bg-bull animate-pulse"
-                ></div>
-                <span
-                    class="text-[9px] text-slate-500 font-bold uppercase tracking-tighter"
-                    >Monitoring</span
-                >
+            <div class="flex rounded overflow-hidden border border-border/60">
+                {#each ["ALL", "WIN", "LOSS", "BE"] as f}
+                    <button
+                        on:click={() => (resultFilter = f)}
+                        class="px-2 py-1 text-[8px] font-bold uppercase transition-colors {resultFilter === f ? 'bg-accent text-white' : 'text-slate-500 hover:text-white'}"
+                    >{f === "ALL" ? "Todo" : f}</button>
+                {/each}
             </div>
         </div>
-        <div class="grid grid-cols-3 gap-1">
-            <button
-                on:click={() => switchSubTab("ideas")}
-                class="sub-tab {$state.activeTradeTab === 'ideas'
-                    ? 'active'
-                    : ''}"
-            >
-                IDEAS ({ideas.length})
-            </button>
-            <button
-                on:click={() => switchSubTab("active")}
-                class="sub-tab {$state.activeTradeTab === 'active'
-                    ? 'active'
-                    : ''}"
-            >
-                LIVE ({live.length})
-            </button>
-            <button
-                on:click={() => switchSubTab("history")}
-                class="sub-tab {$state.activeTradeTab === 'history'
-                    ? 'active'
-                    : ''}"
-            >
-                HISTORY ({history.length})
-            </button>
+
+        <div class="flex justify-between text-[9px] font-mono bg-black/25 rounded px-2 py-1.5 border border-border/40">
+            <span class="text-slate-500">{rows.length} ops</span>
+            <span class="{totals.r >= 0 ? 'text-bull' : 'text-bear'}">{fmt(totals.r)}R</span>
+            <span class="{totals.usd >= 0 ? 'text-bull' : 'text-bear'}">{money(totals.usd)}</span>
+            <span class="text-amber-400" title="Costes totales de las filas mostradas">{money(totals.cost)}</span>
         </div>
     </div>
-    <div class="flex-1 overflow-y-auto custom-scroll p-2 space-y-2">
-        {#if $state.activeTradeTab === "ideas"}
-            {#each ideas as trade}
-                <div
-                    on:click={() => replayTrade(trade)}
-                    class="bg-panel border border-border/50 p-3 rounded hover:border-accent transition-all cursor-pointer"
-                >
-                    <div class="flex justify-between items-center mb-1">
-                        <span class="text-[10px] font-bold text-accent"
-                            >{trade.type} SETUP</span
+
+    <div class="flex-1 overflow-auto custom-scroll">
+        <table class="w-full text-[9px] font-mono">
+            <thead class="bg-panel/95 text-slate-500 uppercase sticky top-0 z-10">
+                <tr class="border-b border-border/50">
+                    {#each COLUMNS as col}
+                        <th
+                            on:click={() => toggleSort(col.key)}
+                            title={col.hint || `Ordenar por ${col.label}`}
+                            class="px-1.5 py-1.5 text-[7.5px] font-bold cursor-pointer hover:text-white transition-colors whitespace-nowrap {col.align === 'right' ? 'text-right' : 'text-left'}"
                         >
-                        <span class="text-[9px] text-slate-500 font-mono"
-                            >{new Date(
-                                trade.time * 1000,
-                            ).toLocaleTimeString()}</span
-                        >
-                    </div>
-                    <div class="text-[10px] text-white font-medium">
-                        {trade.desc}
-                    </div>
-                </div>
-            {:else}
-                <div class="p-8 text-center text-xs text-slate-500 italic">
-                    No trade ideas generated.
-                </div>
-            {/each}
-        {:else if $state.activeTradeTab === "active"}
-            {#each live as trade}
-                <div
-                    on:click={() => replayTrade(trade)}
-                    class="bg-panel border border-accent/50 p-3 rounded hover:border-accent transition-all cursor-pointer"
-                >
-                    <div class="flex justify-between items-center mb-1">
-                        <span class="text-[10px] font-bold text-bull"
-                            >{trade.type} LIVE</span
-                        >
-                        <div class="flex items-center gap-2">
-                            <span
-                                class="text-[10px] font-mono font-bold {trade.pnl >=
-                                0
-                                    ? 'text-bull'
-                                    : 'text-bear'}"
-                            >
-                                {trade.pnl > 0 ? "+" : ""}{trade.pnl.toFixed(
-                                    2,
-                                )}R
-                            </span>
-                        </div>
-                    </div>
-                    <div class="text-[10px] text-white font-medium">
-                        {trade.desc}
-                    </div>
-                </div>
-            {:else}
-                <div class="p-8 text-center text-xs text-slate-500 italic">
-                    No active trades.
-                </div>
-            {/each}
-        {:else}
-            {#each history.slice().sort((a, b) => (b.time || 0) - (a.time || 0)) as trade}
-                <div
-                    on:click={() => replayTrade(trade)}
-                    class="bg-panel/50 border border-border/30 p-3 rounded hover:border-slate-500 transition-all cursor-pointer"
-                >
-                    <div class="flex justify-between items-center mb-1">
-                        <span
-                            class="text-[10px] font-bold {trade.status === 'WIN'
-                                ? 'text-bull'
-                                : trade.status === 'LOSS'
-                                  ? 'text-bear'
-                                  : 'text-slate-400'}"
-                        >
-                            {trade.type}
-                            {trade.status}
-                        </span>
-                        <span
-                            class="text-[10px] font-mono font-bold {trade.pnl >
-                            0
-                                ? 'text-bull'
-                                : trade.pnl < 0
-                                  ? 'text-bear'
-                                  : 'text-slate-400'}"
-                        >
-                            {trade.pnl > 0 ? "+" : ""}{trade.pnl.toFixed(2)}R
-                        </span>
-                    </div>
-                    <div class="text-[10px] text-slate-400">{trade.desc}</div>
-                </div>
-            {:else}
-                <div class="p-8 text-center text-xs text-slate-500 italic">
-                    No trade history available.
-                </div>
-            {/each}
-        {/if}
+                            {col.label}
+                            {#if sortKey === col.key}<i class="fas fa-caret-{sortDir === 1 ? 'up' : 'down'} ml-0.5 text-accent"></i>{/if}
+                        </th>
+                    {/each}
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-border/20">
+                {#each rows as t}
+                    <tr
+                        on:click={() => replayTrade(t)}
+                        class="hover:bg-white/5 cursor-pointer transition-colors"
+                        title={t.desc}
+                    >
+                        <td class="px-1.5 py-1 text-slate-500 whitespace-nowrap">{date(t.entryTime ?? t.time)}</td>
+                        <td class="px-1.5 py-1 font-bold {t.type === 'LONG' ? 'text-bull' : 'text-bear'}">{t.type}</td>
+                        <td class="px-1.5 py-1 text-right font-bold {t.pnl > 0 ? 'text-bull' : t.pnl < 0 ? 'text-bear' : 'text-amber-400'}">{fmt(t.pnl)}</td>
+                        <td class="px-1.5 py-1 text-right {t.pnlUsd > 0 ? 'text-bull' : t.pnlUsd < 0 ? 'text-bear' : 'text-amber-400'}">{money(t.pnlUsd)}</td>
+                        <td class="px-1.5 py-1 text-right text-bear/70">{fmt(t.maeR)}</td>
+                        <td class="px-1.5 py-1 text-right text-bull/70">{fmt(t.mfeR)}</td>
+                        <td class="px-1.5 py-1 text-right text-amber-400/80">{money(t.costUsd)}</td>
+                        <td class="px-1.5 py-1 text-right text-slate-400">{t.barsHeld ?? "—"}</td>
+                        <td class="px-1.5 py-1 text-right text-slate-400">{fmt(t.setupScore, 0)}</td>
+                        <td class="px-1.5 py-1 text-slate-400 whitespace-nowrap">{t.exitReason ?? t.status}</td>
+                    </tr>
+                {:else}
+                    <tr>
+                        <td colspan={COLUMNS.length} class="p-8 text-center text-[9px] text-slate-600 uppercase font-bold tracking-widest">
+                            Sin operaciones para los filtros actuales.
+                        </td>
+                    </tr>
+                {/each}
+            </tbody>
+        </table>
     </div>
 </div>

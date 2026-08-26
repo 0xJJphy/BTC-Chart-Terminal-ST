@@ -18,7 +18,22 @@ A high-performance, institutional-grade cryptocurrency analysis terminal rebuilt
 - **Historical Replay Mode**:
   - Full trade simulation with "Idea", "Entry", "TP", and "SL" markers.
   - Context-aware replay that preserves the exact market state (zones, lines) of the historical setup.
-- **Performance Metrics**: Real-time calculation of Win Rate, Profit Factor, Sharpe Ratio, and Equity Curve.
+- **Backtest Engine (Rust/Wasm)**:
+  - Strictly causal indicators - every value at bar `i` uses only bars `0..=i`. Enforced by
+    a prefix-stability test suite (`cargo test`), not by convention.
+  - Explicit intra-bar fill policy (SL-first by default) instead of an implicit optimistic one.
+  - Single dollar ledger: risk-based position sizing, partial exits, stepped stops,
+    liquidation guard, and a transaction-cost model (realistic taker/maker + funding,
+    flat bps, or gross).
+- **Quant Metrics**: CAGR, Sharpe / Sortino / Calmar annualized from the bar-level
+  mark-to-market curve (365d), Ulcer index, VaR/CVaR, exposure, MAE/MFE, R distribution,
+  monthly returns, bootstrap confidence intervals, Monte Carlo ruin probability,
+  walk-forward split, and probabilistic / deflated Sharpe.
+- **Cost sensitivity sweep**: re-runs the backtest across a range of per-side costs to show
+  how much margin the edge actually has.
+
+See [BACKTEST_BASELINE.md](./BACKTEST_BASELINE.md) for the before/after measurement of the
+look-ahead and accounting fixes on real BTCUSDT data.
 
 ## 🛠️ Installation & Execution
 
@@ -53,6 +68,18 @@ npm run docker:clean   # Reclaim build cache & dangling images
    ```bash
    npm run dev
    ```
+
+### Running the engine test suite
+The causality and accounting guarantees are enforced by tests, so run them after any
+change to `src-rust/`:
+```bash
+cd src-rust && cargo test
+```
+
+To reproduce the baseline table on your own candle file:
+```bash
+cd src-rust && cargo run --release --example baseline -- ../path/to/candles.json
+```
 
 ## 🔌 Institutional Data Integrations (Local API)
 The terminal includes a built-in API proxy providing access to:

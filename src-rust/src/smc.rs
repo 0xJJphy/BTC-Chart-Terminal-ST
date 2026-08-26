@@ -24,8 +24,12 @@ pub fn analyze_smc(candles: &[Candle], sensitivity: f64, history_target: usize, 
     for i in start_index.max(2)..candles.len() {
         let curr = &candles[i];
         let prev2 = &candles[i - 2];
-        let atr = atr_values[i];
-        let avg_vol = avg_volumes[i];
+        // Indicator series are `None` during warm-up now; skip those bars instead of
+        // scoring against a back-filled seed.
+        let (atr, avg_vol) = match (atr_values[i], avg_volumes[i]) {
+            (Some(a), Some(v)) => (a, v),
+            _ => continue,
+        };
 
         // FVG Bullish
         if curr.low > prev2.high {
@@ -224,27 +228,11 @@ pub fn create_trade(idx: usize, trade_type: &str, entry: f64, sl: f64, candles: 
         } else {
             entry - ((entry - sl).abs() * risk_reward)
         },
-        tp1: None,
-        tp2: None,
-        tp3: None,
         signal_time: candles[idx].time,
         time: candles[idx].time,
-        pnl: 0.0,
-        pnl_percent: 0.0,
         desc: "SMC Setup (Rust)".to_string(),
-        entry_time: None,
-        exit_time: None,
-        setup_score: None,
-        dashboard_snapshot: None,
-        sr_level: None,
-        sr_time: None,
-        sr_type: None,
         initial_sl: Some(sl),
-        trailing_sl: None,
-        tp1_time: None,
-        tp2_time: None,
-        tp3_time: None,
-        exit_reason: None,
+        ..Default::default()
     };
 
     process_trade_lifecycle(&mut trade, idx, candles, risk_reward);

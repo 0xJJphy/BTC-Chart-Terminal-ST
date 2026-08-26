@@ -1,88 +1,163 @@
 use serde::{Deserialize, Serialize};
-use crate::models::{Candle, Trade};
+use std::collections::VecDeque;
+
+use crate::costs::{CostBreakdown, CostConfig, CostModel, FillKind};
 use crate::indicators::{
-    calculate_ema, calculate_atr, calculate_avg_volume, 
-    calculate_rsi, calculate_macd, calculate_dmi_adx, calculate_pivots
+    calculate_atr, calculate_avg_volume, calculate_dmi_adx, calculate_ema, calculate_macd,
+    calculate_pivots, calculate_rsi, DmiAdxResult, MacdResult, PivotLevel, Series,
 };
+use crate::models::{Candle, EquityPoint, Trade};
+
+// ---------------------------------------------------------------------------
+// Configuration
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub struct CryptoProConfig {
-    pub show_ema: bool,
+    // --- Signal ---
+    pub ema_fast: usize,
+    pub ema_slow: usize,
+    pub rsi_length: usize,
+    pub adx_length: usize,
     pub pivot_left: usize,
     pub pivot_right: usize,
-    pub max_levels: usize,
-    pub fvg_min_pct: f64,
-    pub ob_lookback: usize,
+    /// How many recently-confirmed pivots stay in the S/R book. Bounds the per-bar scan.
+    pub sr_lookback_pivots: usize,
     pub volume_length: usize,
     pub high_volume: f64,
     pub very_high_volume: f64,
     pub minimum_score: f64,
+
+    // --- Retest ---
     pub wait_for_retest: bool,
     pub min_pullback_atr: f64,
     pub max_pullback_atr: f64,
-    pub min_pullback_pct: f64,
     pub max_wait_bars: usize,
     pub require_recovery_candle: bool,
+
+    // --- Risk / targets ---
     pub atr_length: usize,
     pub atr_multiplier: f64,
     pub max_sl_atr: f64,
     pub rr_tp1: f64,
     pub rr_tp2: f64,
     pub rr_tp3: f64,
+    pub tp1_fraction: f64,
+    pub tp2_fraction: f64,
+
+    // --- Capital ---
     pub initial_capital: f64,
     pub capital_per_trade: f64,
     pub leverage: f64,
+    /// Percent of equity risked per trade. This now actually sizes the position.
     pub risk_percent: f64,
     pub compound_capital: bool,
     pub compound_percent: f64,
+    /// Exchange maintenance margin, percent. Used for the liquidation guard.
+    pub maintenance_margin_pct: f64,
+
+    // --- Execution ---
+    /// "sl_first" (default, conservative) | "tp_first" | "nearest_open".
+    pub intrabar_policy: String,
+    pub max_trades_per_day: usize,
+    pub cooldown_bars: usize,
+    pub costs: CostConfig,
+
+    // --- Reporting ---
     pub analysis_days: usize,
 }
 
 impl Default for CryptoProConfig {
     fn default() -> Self {
         CryptoProConfig {
-            show_ema: true,
+            ema_fast: 50,
+            ema_slow: 200,
+            rsi_length: 14,
+            adx_length: 14,
             pivot_left: 6,
             pivot_right: 6,
-            max_levels: 3,
-            fvg_min_pct: 0.08,
-            ob_lookback: 8,
+            sr_lookback_pivots: 20,
             volume_length: 20,
             high_volume: 1.50,
             very_high_volume: 2.00,
             minimum_score: 65.0,
+
             wait_for_retest: true,
             min_pullback_atr: 0.30,
             max_pullback_atr: 1.50,
-            min_pullback_pct: 0.15,
             max_wait_bars: 8,
             require_recovery_candle: true,
+
             atr_length: 14,
             atr_multiplier: 1.50,
             max_sl_atr: 2.50,
             rr_tp1: 1.0,
             rr_tp2: 2.0,
             rr_tp3: 3.0,
+            tp1_fraction: 0.50,
+            tp2_fraction: 0.25,
+
             initial_capital: 1000.0,
             capital_per_trade: 150.0,
             leverage: 10.0,
-            risk_percent: 2.0,
+            risk_percent: 1.0,
             compound_capital: false,
             compound_percent: 15.0,
+            maintenance_margin_pct: 0.5,
+
+            intrabar_policy: "sl_first".to_string(),
+            max_trades_per_day: 3,
+            cooldown_bars: 6,
+            costs: CostConfig::default(),
+
             analysis_days: 15,
         }
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+/// How to resolve a candle that touches both a target and the stop.
+///
+/// The backtest never knows the intrabar path from OHLC alone, so this is an explicit,
+/// auditable assumption rather than a silent one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IntrabarPolicy {
+    /// Assume the stop filled first. Conservative; the default.
+    SlFirst,
+    /// Assume the target filled first. Optimistic - this is what the old engine did
+    /// implicitly, and it is what inflated the reported win rate.
+    TpFirst,
+    /// Assume whichever level sits closer to the open was reached first.
+    NearestOpen,
+}
+
+impl IntrabarPolicy {
+    fn parse(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "tp_first" | "tpfirst" | "optimistic" => IntrabarPolicy::TpFirst,
+            "nearest_open" | "nearestopen" | "proportional" => IntrabarPolicy::NearestOpen,
+            _ => IntrabarPolicy::SlFirst,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Output types
+// ---------------------------------------------------------------------------
+
+/// The market read at a single bar. Used both for the live panel and, frozen, as the
+/// per-trade audit snapshot. Replaces four hand-written `serde_json::json!` blocks that
+/// had drifted out of sync with each other.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 #[serde(rename_all = "camelCase")]
-pub struct CryptoProDashboard {
+pub struct MarketSnapshot {
     pub signal: String,
     pub strength_long: f64,
     pub strength_short: f64,
-    pub prob_up: f64,
-    pub prob_dn: f64,
+    /// Empirically calibrated probability that a setup at this score wins, in percent.
+    /// `None` when there is not enough backtest history to calibrate - the UI must show
+    /// a dash rather than invent a number.
+    pub prob_up: Option<f64>,
     pub adx_value: f64,
     pub adx_regime: String,
     pub di_bias: String,
@@ -99,34 +174,51 @@ pub struct CryptoProDashboard {
     pub current_tp2: f64,
     pub current_tp3: f64,
     pub risk_reward: String,
+    // Book state at the moment this snapshot was taken.
+    pub equity_at_entry: f64,
+    pub trades_before: usize,
+    pub position_qty: f64,
+    pub position_notional: f64,
+    pub risk_usd: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CryptoProDashboard {
+    #[serde(flatten)]
+    pub snapshot: MarketSnapshot,
+
     pub trade_progress: String,
-    // Global Statistics
+    pub limit_status: String,
+
+    // Global statistics (all in account currency, net of costs).
     pub total_trades: usize,
     pub winning_trades: usize,
     pub losing_trades: usize,
+    pub breakeven_trades: usize,
     pub tp1_count: usize,
     pub tp2_count: usize,
     pub tp3_count: usize,
     pub sl_no_tp_count: usize,
     pub win_rate: f64,
-    // Capital & PnL
+
     pub initial_capital: f64,
     pub capital_per_trade: f64,
     pub current_capital: f64,
     pub total_pnl: f64,
-    pub pnl_tp1: f64,
-    pub pnl_tp2: f64,
-    pub pnl_tp3: f64,
-    pub pnl_sl_total: f64,
+    pub total_pnl_r: f64,
+    pub total_costs: f64,
+    pub cost_breakdown: CostBreakdown,
     pub leverage: f64,
     pub risk_per_trade_pct: f64,
-    // Analysis Period (15 Days)
+    pub ruined: bool,
+
+    // Trailing-window analysis.
     pub analysis_days: usize,
     pub pnl_per_day: f64,
     pub period_pnl: f64,
     pub period_trades: usize,
     pub period_win_rate: f64,
-    pub limit_status: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -134,781 +226,1123 @@ pub struct CryptoProDashboard {
 pub struct CryptoProResult {
     pub dashboard: CryptoProDashboard,
     pub trades: Vec<Trade>,
+    /// Bar-by-bar mark-to-market equity, the input to every drawdown-based metric.
+    pub equity_curve: Vec<EquityPoint>,
 }
 
-pub fn analyze_crypto_pro(candles: &[Candle], config: &CryptoProConfig) -> CryptoProResult {
-    let n = candles.len();
-    if n < 50 {
-        return CryptoProResult {
-            dashboard: CryptoProDashboard {
-                signal: "NEUTRAL".to_string(),
-                strength_long: 0.0,
-                strength_short: 0.0,
-                prob_up: 50.0,
-                prob_dn: 50.0,
-                adx_value: 0.0,
-                adx_regime: "RANGO".to_string(),
-                di_bias: "NEUTRAL".to_string(),
-                macd_state: "NEUTRAL".to_string(),
-                rsi_value: 50.0,
-                rsi_state: "NEUTRAL".to_string(),
-                volume_ratio: 1.0,
-                volume_state: "NORMAL".to_string(),
-                trap_state: "NINGUNA".to_string(),
-                zone_state: "—".to_string(),
-                current_entry: 0.0,
-                current_sl: 0.0,
-                current_tp1: 0.0,
-                current_tp2: 0.0,
-                current_tp3: 0.0,
-                risk_reward: "1 : 3".to_string(),
-                trade_progress: "SIN DATOS".to_string(),
-                total_trades: 0,
-                winning_trades: 0,
-                losing_trades: 0,
-                tp1_count: 0,
-                tp2_count: 0,
-                tp3_count: 0,
-                sl_no_tp_count: 0,
-                win_rate: 0.0,
-                initial_capital: config.initial_capital,
-                capital_per_trade: config.capital_per_trade,
-                current_capital: config.initial_capital,
-                total_pnl: 0.0,
-                pnl_tp1: 0.0,
-                pnl_tp2: 0.0,
-                pnl_tp3: 0.0,
-                pnl_sl_total: 0.0,
-                leverage: config.leverage,
-                risk_per_trade_pct: config.risk_percent,
-                analysis_days: config.analysis_days,
-                pnl_per_day: 0.0,
-                period_pnl: 0.0,
-                period_trades: 0,
-                period_win_rate: 0.0,
-                limit_status: "—".to_string(),
-            },
-            trades: vec![],
-        };
-    }
 
-    // 1. Calculate Core Modular Indicators (Strictly Causal)
-    let ema_50 = calculate_ema(candles, 50);
-    let ema_200 = calculate_ema(candles, 200);
-    let atr = calculate_atr(candles, config.atr_length);
-    let avg_vol = calculate_avg_volume(candles, config.volume_length);
-    let rsi = calculate_rsi(candles, 14);
-    let macd = calculate_macd(candles, 12, 26, 9);
-    let dmi = calculate_dmi_adx(candles, 14);
-    let pivots = calculate_pivots(candles, config.pivot_left, config.pivot_right);
+// ---------------------------------------------------------------------------
+// Internal state
+// ---------------------------------------------------------------------------
 
-    // 2. State Machine for Retest & Trade Execution Simulation
-    #[derive(PartialEq)]
-    enum RetestState {
-        Idle,
-        ArmedLong { pivot_price: f64, bar_idx: usize, score: f64 },
-        ArmedShort { pivot_price: f64, bar_idx: usize, score: f64 },
-    }
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Side {
+    Long,
+    Short,
+}
 
-    let mut retest_state = RetestState::Idle;
-    let mut trades: Vec<Trade> = Vec::new();
-    let mut current_capital = config.initial_capital;
-
-    let mut tp1_hits = 0;
-    let mut tp2_hits = 0;
-    let mut tp3_hits = 0;
-    let mut sl_hits = 0;
-    let mut pnl_tp1_acc = 0.0;
-    let mut pnl_tp2_acc = 0.0;
-    let mut pnl_tp3_acc = 0.0;
-    let mut pnl_sl_acc = 0.0;
-
-    let mut trade_id_counter = 1;
-    let mut in_active_trade = false;
-    let mut active_trade_side = "";
-    let mut active_entry = 0.0;
-    let mut active_sl = 0.0;
-    let mut active_initial_sl = 0.0;
-    let mut active_tp1 = 0.0;
-    let mut active_tp2 = 0.0;
-    let mut active_tp3 = 0.0;
-    let mut active_tp1_reached = false;
-    let mut active_tp2_reached = false;
-    let mut active_pos_size = 0.0;
-    let mut active_entry_time = 0;
-    let mut active_signal_time = 0;
-    let mut active_score = 0.0;
-    let mut active_snapshot: Option<serde_json::Value> = None;
-    let mut active_sr_level: Option<f64> = None;
-    let mut active_sr_time: Option<u64> = None;
-    let mut active_sr_type: Option<String> = None;
-
-    let mut active_tp1_time: u64 = 0;
-    let mut active_tp2_time: u64 = 0;
-    let mut active_tp3_time: u64 = 0;
-    let mut active_tp3_reached = false;
-
-    let mut cooldown_until_bar: usize = 0;
-    let mut current_day_id: u64 = 0;
-    let mut daily_trade_count: usize = 0;
-    let max_trades_per_day: usize = 3;
-    let cooldown_bars: usize = 6;
-
-    let start_idx = 50.max(config.pivot_left + config.pivot_right + 1);
-
-    for i in start_idx..n {
-        let c = &candles[i];
-        let day_id = c.time / 86400;
-        if day_id != current_day_id {
-            current_day_id = day_id;
-            daily_trade_count = 0;
+impl Side {
+    #[inline]
+    fn dir(self) -> f64 {
+        match self {
+            Side::Long => 1.0,
+            Side::Short => -1.0,
         }
+    }
+    fn as_str(self) -> &'static str {
+        match self {
+            Side::Long => "LONG",
+            Side::Short => "SHORT",
+        }
+    }
+}
 
-        let curr_atr = atr[i].max(0.01);
-        let curr_vol = c.volume.unwrap_or(1.0);
-        let curr_avg_vol = avg_vol[i].max(0.01);
-        let vol_ratio = curr_vol / curr_avg_vol;
+struct Position {
+    side: Side,
+    entry: f64,
+    initial_sl: f64,
+    sl: f64,
+    tp: [f64; 3],
+    tp_hit: [bool; 3],
+    tp_time: [u64; 3],
+    qty_total: f64,
+    qty_open: f64,
+    risk_usd: f64,
+    realized_usd: f64,
+    costs: CostBreakdown,
+    entry_index: usize,
+    entry_time: u64,
+    signal_time: u64,
+    score: f64,
+    equity_at_entry: f64,
+    mae_r: f64,
+    mfe_r: f64,
+    snapshot: MarketSnapshot,
+    sr_level: Option<f64>,
+    sr_time: Option<u64>,
+    sr_type: Option<String>,
+}
 
-        // Active Trade Simulation Step
-        if in_active_trade {
-            let mut trade_closed = false;
-            let mut exit_reason = "";
-            let mut exit_price = c.close;
+enum RetestState {
+    Idle,
+    Armed { side: Side, anchor_price: f64, bar_idx: usize, score: f64 },
+}
 
-            if active_trade_side == "LONG" {
-                if !active_tp1_reached && c.high >= active_tp1 {
-                    active_tp1_reached = true;
-                    active_tp1_time = c.time as u64;
-                    tp1_hits += 1;
-                    let pnl_chunk = (active_pos_size * 0.50) * ((active_tp1 - active_entry) / active_entry) * config.leverage;
-                    pnl_tp1_acc += pnl_chunk;
-                    current_capital += pnl_chunk;
-                    active_sl = active_entry; // Break-even
-                }
-                if active_tp1_reached && !active_tp2_reached && c.high >= active_tp2 {
-                    active_tp2_reached = true;
-                    active_tp2_time = c.time as u64;
-                    tp2_hits += 1;
-                    let pnl_chunk = (active_pos_size * 0.25) * ((active_tp2 - active_entry) / active_entry) * config.leverage;
-                    pnl_tp2_acc += pnl_chunk;
-                    current_capital += pnl_chunk;
-                    active_sl = active_tp1; // Trail to TP1
-                }
-                if active_tp2_reached && c.high >= active_tp3 {
-                    active_tp3_reached = true;
-                    active_tp3_time = c.time as u64;
-                    tp3_hits += 1;
-                    let pnl_chunk = (active_pos_size * 0.25) * ((active_tp3 - active_entry) / active_entry) * config.leverage;
-                    pnl_tp3_acc += pnl_chunk;
-                    current_capital += pnl_chunk;
-                    trade_closed = true;
-                    exit_reason = "TP3";
-                    exit_price = active_tp3;
-                }
-                if c.low <= active_sl {
-                    trade_closed = true;
-                    exit_price = active_sl;
-                    if !active_tp1_reached {
-                        sl_hits += 1;
-                        let loss = active_pos_size * ((active_entry - active_sl) / active_entry) * config.leverage;
-                        pnl_sl_acc += loss;
-                        current_capital -= loss;
-                        exit_reason = "SL";
-                    } else {
-                        exit_reason = "BE (SL After TP)";
-                    }
-                }
-            } else if active_trade_side == "SHORT" {
-                if !active_tp1_reached && c.low <= active_tp1 {
-                    active_tp1_reached = true;
-                    active_tp1_time = c.time as u64;
-                    tp1_hits += 1;
-                    let pnl_chunk = (active_pos_size * 0.50) * ((active_entry - active_tp1) / active_entry) * config.leverage;
-                    pnl_tp1_acc += pnl_chunk;
-                    current_capital += pnl_chunk;
-                    active_sl = active_entry;
-                }
-                if active_tp1_reached && !active_tp2_reached && c.low <= active_tp2 {
-                    active_tp2_reached = true;
-                    active_tp2_time = c.time as u64;
-                    tp2_hits += 1;
-                    let pnl_chunk = (active_pos_size * 0.25) * ((active_entry - active_tp2) / active_entry) * config.leverage;
-                    pnl_tp2_acc += pnl_chunk;
-                    current_capital += pnl_chunk;
-                    active_sl = active_tp1; // Trail to TP1
-                }
-                if active_tp2_reached && c.low <= active_tp3 {
-                    active_tp3_reached = true;
-                    active_tp3_time = c.time as u64;
-                    tp3_hits += 1;
-                    let pnl_chunk = (active_pos_size * 0.25) * ((active_entry - active_tp3) / active_entry) * config.leverage;
-                    pnl_tp3_acc += pnl_chunk;
-                    current_capital += pnl_chunk;
-                    trade_closed = true;
-                    exit_reason = "TP3";
-                    exit_price = active_tp3;
-                }
-                if c.high >= active_sl {
-                    trade_closed = true;
-                    exit_price = active_sl;
-                    if !active_tp1_reached {
-                        sl_hits += 1;
-                        let loss = active_pos_size * ((active_sl - active_entry) / active_entry) * config.leverage;
-                        pnl_sl_acc += loss;
-                        current_capital -= loss;
-                        exit_reason = "SL";
-                    } else {
-                        exit_reason = "BE (SL After TP)";
-                    }
-                }
+struct Indicators {
+    ema_fast: Series,
+    ema_slow: Series,
+    atr: Series,
+    avg_vol: Series,
+    rsi: Series,
+    macd: MacdResult,
+    dmi: DmiAdxResult,
+}
+
+/// Everything `score_bar` needs that is not per-bar.
+struct ScoreInputs {
+    near_support: bool,
+    near_resistance: bool,
+    vol_ratio: f64,
+}
+
+// ---------------------------------------------------------------------------
+// Scoring - one implementation, used by both the backtest loop and the live panel
+// ---------------------------------------------------------------------------
+
+/// Confluence score for bar `i`, returning `(long, short)` out of 100.
+///
+/// Returns `None` while any input indicator is still in its warm-up window, so the
+/// strategy simply does not trade there instead of scoring against undefined values.
+fn score_bar(
+    candles: &[Candle],
+    i: usize,
+    ind: &Indicators,
+    cfg: &CryptoProConfig,
+    inputs: &ScoreInputs,
+) -> Option<(f64, f64)> {
+    let c = &candles[i];
+    let ema_fast = ind.ema_fast[i]?;
+    let ema_slow = ind.ema_slow[i]?;
+    let adx = ind.dmi.adx[i]?;
+    let di_plus = ind.dmi.di_plus[i]?;
+    let di_minus = ind.dmi.di_minus[i]?;
+    let macd = ind.macd.macd[i]?;
+    let signal = ind.macd.signal[i]?;
+    let hist = ind.macd.hist[i]?;
+    let rsi = ind.rsi[i]?;
+
+    let mut long = 0.0;
+    let mut short = 0.0;
+
+    // 1. Trend structure (EMA fast / slow).
+    if c.close > ema_fast && ema_fast > ema_slow {
+        long += 25.0;
+    }
+    if c.close < ema_fast && ema_fast < ema_slow {
+        short += 25.0;
+    }
+
+    // 2. Directional regime.
+    if adx > 25.0 {
+        if di_plus > di_minus {
+            long += 20.0;
+        }
+        if di_minus > di_plus {
+            short += 20.0;
+        }
+    }
+
+    // 3. Momentum.
+    if hist > 0.0 && macd > signal {
+        long += 15.0;
+    }
+    if hist < 0.0 && macd < signal {
+        short += 15.0;
+    }
+
+    // 4. RSI band.
+    if (45.0..=70.0).contains(&rsi) {
+        long += 15.0;
+    }
+    if (30.0..=55.0).contains(&rsi) {
+        short += 15.0;
+    }
+
+    // 5. Volume confirmation.
+    if inputs.vol_ratio >= cfg.high_volume {
+        if c.close >= c.open {
+            long += 15.0;
+        } else {
+            short += 15.0;
+        }
+    }
+
+    // 6. S/R confluence (confirmed pivots only).
+    if inputs.near_support {
+        long += 10.0;
+    }
+    if inputs.near_resistance {
+        short += 10.0;
+    }
+
+    Some((long, short))
+}
+
+// ---------------------------------------------------------------------------
+// Score -> win-probability calibration
+// ---------------------------------------------------------------------------
+
+const CALIB_BIN_WIDTH: f64 = 5.0;
+const CALIB_MIN_BIN: usize = 10;
+const CALIB_MIN_TOTAL: usize = 30;
+
+struct Calibration {
+    bins: Vec<(usize, usize)>, // (wins, total) indexed by score / CALIB_BIN_WIDTH
+    total_wins: usize,
+    total: usize,
+}
+
+impl Calibration {
+    fn build(trades: &[Trade]) -> Self {
+        let n_bins = (100.0 / CALIB_BIN_WIDTH) as usize + 1;
+        let mut bins = vec![(0usize, 0usize); n_bins];
+        let mut total_wins = 0;
+        let mut total = 0;
+
+        for t in trades {
+            let score = t.setup_score.unwrap_or(0.0).clamp(0.0, 100.0);
+            let idx = (score / CALIB_BIN_WIDTH) as usize;
+            let is_win = t.pnl_usd > 0.0;
+            bins[idx].1 += 1;
+            if is_win {
+                bins[idx].0 += 1;
             }
-
-            if trade_closed {
-                let (status_str, is_win, pnl_r) = if exit_reason == "TP3" {
-                    ("WIN".to_string(), true, 1.75)
-                } else if exit_reason == "BE (SL After TP)" {
-                    if active_tp2_reached { ("WIN".to_string(), true, 1.00) } else { ("BE".to_string(), true, 0.50) }
-                } else {
-                    ("LOSS".to_string(), false, -1.00)
-                };
-
-                trades.push(Trade {
-                    id: format!("PRO-{}", trade_id_counter),
-                    trade_type: active_trade_side.to_string(),
-                    status: status_str,
-                    entry: active_entry,
-                    sl: active_initial_sl,
-                    tp: active_tp2,
-                    tp1: Some(active_tp1),
-                    tp2: Some(active_tp2),
-                    tp3: Some(active_tp3),
-                    signal_time: active_signal_time as u64,
-                    time: active_entry_time as u64,
-                    pnl: pnl_r,
-                    pnl_percent: pnl_r * config.risk_percent,
-                    desc: format!("CryptoPRO {}: {} @ ${:.2}", active_trade_side, exit_reason, exit_price),
-                    entry_time: Some(active_entry_time as u64),
-                    exit_time: Some(c.time as u64),
-                    setup_score: Some(active_score),
-                    dashboard_snapshot: active_snapshot.clone(),
-                    sr_level: active_sr_level,
-                    sr_time: active_sr_time,
-                    sr_type: active_sr_type.clone(),
-                    initial_sl: Some(active_initial_sl),
-                    trailing_sl: if active_tp1_reached { Some(active_sl) } else { None },
-                    tp1_time: if active_tp1_reached { Some(active_tp1_time) } else { None },
-                    tp2_time: if active_tp2_reached { Some(active_tp2_time) } else { None },
-                    tp3_time: if active_tp3_reached { Some(active_tp3_time) } else { None },
-                    exit_reason: Some(exit_reason.to_string()),
-                });
-                trade_id_counter += 1;
-                in_active_trade = false;
-                cooldown_until_bar = i + cooldown_bars;
-                retest_state = RetestState::Idle;
+            total += 1;
+            if is_win {
+                total_wins += 1;
             }
         }
 
-        // --- CONFLUENCE SCORING SYSTEM (0-100) ---
-        let mut score_long = 0.0;
-        let mut score_short = 0.0;
-
-        // 1. Trend Filter (EMA 50 / 200)
-        if c.close > ema_50[i] && ema_50[i] > ema_200[i] { score_long += 25.0; }
-        if c.close < ema_50[i] && ema_50[i] < ema_200[i] { score_short += 25.0; }
-
-        // 2. DMI & ADX Regime
-        if dmi.adx[i] > 25.0 {
-            if dmi.di_plus[i] > dmi.di_minus[i] { score_long += 20.0; }
-            if dmi.di_minus[i] > dmi.di_plus[i] { score_short += 20.0; }
-        }
-
-        // 3. MACD Momentum
-        if macd.hist[i] > 0.0 && macd.macd[i] > macd.signal[i] { score_long += 15.0; }
-        if macd.hist[i] < 0.0 && macd.macd[i] < macd.signal[i] { score_short += 15.0; }
-
-        // 4. RSI Pullback / Momentum Filter
-        if rsi[i] >= 45.0 && rsi[i] <= 70.0 { score_long += 15.0; }
-        if rsi[i] >= 30.0 && rsi[i] <= 55.0 { score_short += 15.0; }
-
-        // 5. Volume Confirmation
-        if vol_ratio >= config.high_volume {
-            if c.close >= c.open { score_long += 15.0; } else { score_short += 15.0; }
-        }
-
-        // 6. S/R Confluence
-        let supp_pivot = pivots.iter().filter(|p| !p.is_high && (c.low - p.price).abs() <= curr_atr * 1.5).last().cloned();
-        let res_pivot = pivots.iter().filter(|p| p.is_high && (c.high - p.price).abs() <= curr_atr * 1.5).last().cloned();
-        let closest_supp = pivots.iter().filter(|p| !p.is_high && p.price <= c.close).last().cloned();
-        let closest_res = pivots.iter().filter(|p| p.is_high && p.price >= c.close).last().cloned();
-        let near_support = supp_pivot.is_some();
-        let near_resistance = res_pivot.is_some();
-        if near_support { score_long += 10.0; }
-        if near_resistance { score_short += 10.0; }
-
-        // Retest State Transition Logic with Cooldown and Daily Trade Limit
-        if !in_active_trade && i >= cooldown_until_bar && daily_trade_count < max_trades_per_day {
-            match retest_state {
-                RetestState::Idle => {
-                    if score_long >= config.minimum_score {
-                        if config.wait_for_retest {
-                            retest_state = RetestState::ArmedLong { pivot_price: c.close, bar_idx: i, score: score_long };
-                        } else {
-                            daily_trade_count += 1;
-                            in_active_trade = true;
-                            active_trade_side = "LONG";
-                            active_entry = c.close;
-                            active_sl = (c.close - curr_atr * config.atr_multiplier).max(c.close - curr_atr * config.max_sl_atr);
-                            active_initial_sl = active_sl;
-                            let risk_dist = (active_entry - active_sl).max(0.01);
-                            active_tp1 = active_entry + risk_dist * config.rr_tp1;
-                            active_tp2 = active_entry + risk_dist * config.rr_tp2;
-                            active_tp3 = active_entry + risk_dist * config.rr_tp3;
-                            active_pos_size = if config.compound_capital { current_capital * (config.compound_percent / 100.0) } else { config.capital_per_trade };
-                            active_tp1_reached = false;
-                            active_tp2_reached = false;
-                            active_entry_time = c.time;
-                            active_signal_time = c.time;
-                            active_score = score_long;
-                            active_sr_level = supp_pivot.as_ref().or(closest_supp.as_ref()).map(|p| p.price);
-                            active_sr_time = supp_pivot.as_ref().or(closest_supp.as_ref()).map(|p| p.time as u64);
-                            active_sr_type = Some("SUPPORT".to_string());
-                            active_snapshot = Some(serde_json::json!({
-                                "signal": "LONG",
-                                "strengthLong": score_long,
-                                "strengthShort": score_short,
-                                "probUp": 75.0,
-                                "probDn": 25.0,
-                                "adxValue": (dmi.adx[i] * 10.0).round() / 10.0,
-                                "adxRegime": if dmi.adx[i] >= 35.0 { "TENDENCIA MUY FUERTE" } else if dmi.adx[i] >= 25.0 { "TENDENCIA FUERTE" } else { "RANGO" },
-                                "diBias": format!("ALCISTA (+{:.0} / -{:.0})", dmi.di_plus[i], dmi.di_minus[i]),
-                                "macdState": if macd.hist[i] > 0.0 { "ALCISTA" } else { "BAJISTA" },
-                                "rsiValue": (rsi[i] * 10.0).round() / 10.0,
-                                "rsiState": if rsi[i] >= 70.0 { "SOBRECOMPRA" } else if rsi[i] <= 30.0 { "SOBREVENTA" } else { "NEUTRAL" },
-                                "volumeRatio": (vol_ratio * 10.0).round() / 10.0,
-                                "volumeState": if vol_ratio >= config.very_high_volume { "MUY ALTO" } else if vol_ratio >= config.high_volume { "ALTO" } else { "NORMAL" },
-                                "trapState": "NINGUNA",
-                                "zoneState": "DIRECTO (CONFLUENCIA)",
-                                "currentEntry": active_entry,
-                                "currentSl": active_initial_sl,
-                                "currentTp1": active_tp1,
-                                "currentTp2": active_tp2,
-                                "currentTp3": active_tp3,
-                                "riskReward": "1 : 2.0 (DINÁMICO)",
-                                "tradeProgress": "EJECUTADO ✓",
-                                "totalTrades": trades.len() + 1,
-                                "winningTrades": tp1_hits,
-                                "losingTrades": sl_hits,
-                                "tp1Count": tp1_hits,
-                                "tp2Count": tp2_hits,
-                                "tp3Count": tp3_hits,
-                                "slNoTpCount": sl_hits,
-                                "winRate": if (tp1_hits + sl_hits) > 0 { ((tp1_hits as f64 / (tp1_hits + sl_hits) as f64) * 100.0).round() } else { 50.0 },
-                                "initialCapital": config.initial_capital,
-                                "capitalPerTrade": config.capital_per_trade,
-                                "currentCapital": current_capital,
-                                "totalPnl": current_capital - config.initial_capital,
-                                "pnlTp1": pnl_tp1_acc,
-                                "pnlTp2": pnl_tp2_acc,
-                                "pnlTp3": pnl_tp3_acc,
-                                "pnlSlTotal": pnl_sl_acc,
-                                "leverage": config.leverage,
-                                "riskPerTradePct": config.risk_percent,
-                                "analysisDays": config.analysis_days,
-                                "pnlPerDay": (current_capital - config.initial_capital) / (config.analysis_days as f64).max(1.0),
-                                "periodPnl": current_capital - config.initial_capital,
-                                "periodTrades": trades.len() + 1,
-                                "periodWinRate": if (tp1_hits + sl_hits) > 0 { ((tp1_hits as f64 / (tp1_hits + sl_hits) as f64) * 100.0).round() } else { 50.0 },
-                                "limitStatus": "ORDEN EJECUTADA ✓"
-                            }));
-                        }
-                    } else if score_short >= config.minimum_score {
-                        if config.wait_for_retest {
-                            retest_state = RetestState::ArmedShort { pivot_price: c.close, bar_idx: i, score: score_short };
-                        } else {
-                            daily_trade_count += 1;
-                            in_active_trade = true;
-                            active_trade_side = "SHORT";
-                            active_entry = c.close;
-                            active_sl = (c.close + curr_atr * config.atr_multiplier).min(c.close + curr_atr * config.max_sl_atr);
-                            active_initial_sl = active_sl;
-                            let risk_dist = (active_sl - active_entry).max(0.01);
-                            active_tp1 = active_entry - risk_dist * config.rr_tp1;
-                            active_tp2 = active_entry - risk_dist * config.rr_tp2;
-                            active_tp3 = active_entry - risk_dist * config.rr_tp3;
-                            active_pos_size = if config.compound_capital { current_capital * (config.compound_percent / 100.0) } else { config.capital_per_trade };
-                            active_tp1_reached = false;
-                            active_tp2_reached = false;
-                            active_entry_time = c.time;
-                            active_signal_time = c.time;
-                            active_score = score_short;
-                            active_sr_level = res_pivot.as_ref().or(closest_res.as_ref()).map(|p| p.price);
-                            active_sr_time = res_pivot.as_ref().or(closest_res.as_ref()).map(|p| p.time as u64);
-                            active_sr_type = Some("RESISTANCE".to_string());
-                            active_snapshot = Some(serde_json::json!({
-                                "signal": "SHORT",
-                                "strengthLong": score_long,
-                                "strengthShort": score_short,
-                                "probUp": 25.0,
-                                "probDn": 75.0,
-                                "adxValue": (dmi.adx[i] * 10.0).round() / 10.0,
-                                "adxRegime": if dmi.adx[i] >= 35.0 { "TENDENCIA MUY FUERTE" } else if dmi.adx[i] >= 25.0 { "TENDENCIA FUERTE" } else { "RANGO" },
-                                "diBias": format!("BAJISTA (+{:.0} / -{:.0})", dmi.di_plus[i], dmi.di_minus[i]),
-                                "macdState": if macd.hist[i] < 0.0 { "BAJISTA" } else { "ALCISTA" },
-                                "rsiValue": (rsi[i] * 10.0).round() / 10.0,
-                                "rsiState": if rsi[i] <= 30.0 { "SOBREVENTA" } else if rsi[i] >= 70.0 { "SOBRECOMPRA" } else { "NEUTRAL" },
-                                "volumeRatio": (vol_ratio * 10.0).round() / 10.0,
-                                "volumeState": if vol_ratio >= config.very_high_volume { "MUY ALTO" } else if vol_ratio >= config.high_volume { "ALTO" } else { "NORMAL" },
-                                "trapState": "NINGUNA",
-                                "zoneState": "DIRECTO (CONFLUENCIA)",
-                                "currentEntry": active_entry,
-                                "currentSl": active_initial_sl,
-                                "currentTp1": active_tp1,
-                                "currentTp2": active_tp2,
-                                "currentTp3": active_tp3,
-                                "riskReward": "1 : 2.0 (DINÁMICO)",
-                                "tradeProgress": "EJECUTADO ✓",
-                                "totalTrades": trades.len() + 1,
-                                "winningTrades": tp1_hits,
-                                "losingTrades": sl_hits,
-                                "tp1Count": tp1_hits,
-                                "tp2Count": tp2_hits,
-                                "tp3Count": tp3_hits,
-                                "slNoTpCount": sl_hits,
-                                "winRate": if (tp1_hits + sl_hits) > 0 { ((tp1_hits as f64 / (tp1_hits + sl_hits) as f64) * 100.0).round() } else { 50.0 },
-                                "initialCapital": config.initial_capital,
-                                "capitalPerTrade": config.capital_per_trade,
-                                "currentCapital": current_capital,
-                                "totalPnl": current_capital - config.initial_capital,
-                                "pnlTp1": pnl_tp1_acc,
-                                "pnlTp2": pnl_tp2_acc,
-                                "pnlTp3": pnl_tp3_acc,
-                                "pnlSlTotal": pnl_sl_acc,
-                                "leverage": config.leverage,
-                                "riskPerTradePct": config.risk_percent,
-                                "analysisDays": config.analysis_days,
-                                "pnlPerDay": (current_capital - config.initial_capital) / (config.analysis_days as f64).max(1.0),
-                                "periodPnl": current_capital - config.initial_capital,
-                                "periodTrades": trades.len() + 1,
-                                "periodWinRate": if (tp1_hits + sl_hits) > 0 { ((tp1_hits as f64 / (tp1_hits + sl_hits) as f64) * 100.0).round() } else { 50.0 },
-                                "limitStatus": "ORDEN EJECUTADA ✓"
-                            }));
-                        }
-                    }
-                }
-                RetestState::ArmedLong { pivot_price, bar_idx, score } => {
-                    if i - bar_idx > config.max_wait_bars {
-                        retest_state = RetestState::Idle;
-                    } else {
-                        let pullback_dist = pivot_price - c.low;
-                        let is_pullback = pullback_dist >= (curr_atr * config.min_pullback_atr) && pullback_dist <= (curr_atr * config.max_pullback_atr);
-                        let recovery_confirmed = if config.require_recovery_candle { c.close > c.open && c.close > candles[i - 1].high * 0.998 } else { true };
-
-                        if is_pullback && recovery_confirmed {
-                            daily_trade_count += 1;
-                            in_active_trade = true;
-                            active_trade_side = "LONG";
-                            active_entry = c.close;
-                            active_sl = (c.low - curr_atr * 0.5).max(c.close - curr_atr * config.max_sl_atr);
-                            active_initial_sl = active_sl;
-                            let risk_dist = (active_entry - active_sl).max(0.01);
-                            active_tp1 = active_entry + risk_dist * config.rr_tp1;
-                            active_tp2 = active_entry + risk_dist * config.rr_tp2;
-                            active_tp3 = active_entry + risk_dist * config.rr_tp3;
-                            active_pos_size = if config.compound_capital { current_capital * (config.compound_percent / 100.0) } else { config.capital_per_trade };
-                            active_tp1_reached = false;
-                            active_tp2_reached = false;
-                            active_entry_time = c.time;
-                            active_signal_time = candles[bar_idx].time;
-                            active_score = score;
-                            active_sr_level = supp_pivot.as_ref().or(closest_supp.as_ref()).map(|p| p.price);
-                            active_sr_time = supp_pivot.as_ref().or(closest_supp.as_ref()).map(|p| p.time as u64);
-                            active_sr_type = Some("SUPPORT".to_string());
-                            active_snapshot = Some(serde_json::json!({
-                                "signal": "LONG",
-                                "strengthLong": score,
-                                "strengthShort": 0.0,
-                                "probUp": 80.0,
-                                "probDn": 20.0,
-                                "adxValue": (dmi.adx[i] * 10.0).round() / 10.0,
-                                "adxRegime": if dmi.adx[i] >= 35.0 { "TENDENCIA MUY FUERTE" } else if dmi.adx[i] >= 25.0 { "TENDENCIA FUERTE" } else { "RANGO" },
-                                "diBias": format!("ALCISTA (+{:.0} / -{:.0})", dmi.di_plus[i], dmi.di_minus[i]),
-                                "macdState": if macd.hist[i] > 0.0 { "ALCISTA" } else { "BAJISTA" },
-                                "rsiValue": (rsi[i] * 10.0).round() / 10.0,
-                                "rsiState": if rsi[i] >= 70.0 { "SOBRECOMPRA" } else if rsi[i] <= 30.0 { "SOBREVENTA" } else { "NEUTRAL" },
-                                "volumeRatio": (vol_ratio * 10.0).round() / 10.0,
-                                "volumeState": if vol_ratio >= config.very_high_volume { "MUY ALTO" } else if vol_ratio >= config.high_volume { "ALTO" } else { "NORMAL" },
-                                "trapState": "NINGUNA",
-                                "zoneState": "RETEST CONFIRMADO ✓",
-                                "currentEntry": active_entry,
-                                "currentSl": active_initial_sl,
-                                "currentTp1": active_tp1,
-                                "currentTp2": active_tp2,
-                                "currentTp3": active_tp3,
-                                "riskReward": "1 : 2.0 (DINÁMICO)",
-                                "tradeProgress": "EJECUTADO ✓",
-                                "totalTrades": trades.len() + 1,
-                                "winningTrades": tp1_hits,
-                                "losingTrades": sl_hits,
-                                "tp1Count": tp1_hits,
-                                "tp2Count": tp2_hits,
-                                "tp3Count": tp3_hits,
-                                "slNoTpCount": sl_hits,
-                                "winRate": if (tp1_hits + sl_hits) > 0 { ((tp1_hits as f64 / (tp1_hits + sl_hits) as f64) * 100.0).round() } else { 50.0 },
-                                "initialCapital": config.initial_capital,
-                                "capitalPerTrade": config.capital_per_trade,
-                                "currentCapital": current_capital,
-                                "totalPnl": current_capital - config.initial_capital,
-                                "pnlTp1": pnl_tp1_acc,
-                                "pnlTp2": pnl_tp2_acc,
-                                "pnlTp3": pnl_tp3_acc,
-                                "pnlSlTotal": pnl_sl_acc,
-                                "leverage": config.leverage,
-                                "riskPerTradePct": config.risk_percent,
-                                "analysisDays": config.analysis_days,
-                                "pnlPerDay": (current_capital - config.initial_capital) / (config.analysis_days as f64).max(1.0),
-                                "periodPnl": current_capital - config.initial_capital,
-                                "periodTrades": trades.len() + 1,
-                                "periodWinRate": if (tp1_hits + sl_hits) > 0 { ((tp1_hits as f64 / (tp1_hits + sl_hits) as f64) * 100.0).round() } else { 50.0 },
-                                "limitStatus": "ORDEN EJECUTADA ✓"
-                            }));
-                            retest_state = RetestState::Idle;
-                        }
-                    }
-                }
-                RetestState::ArmedShort { pivot_price, bar_idx, score } => {
-                    if i - bar_idx > config.max_wait_bars {
-                        retest_state = RetestState::Idle;
-                    } else {
-                        let pullback_dist = c.high - pivot_price;
-                        let is_pullback = pullback_dist >= (curr_atr * config.min_pullback_atr) && pullback_dist <= (curr_atr * config.max_pullback_atr);
-                        let recovery_confirmed = if config.require_recovery_candle { c.close < c.open && c.close < candles[i - 1].low * 1.002 } else { true };
-
-                        if is_pullback && recovery_confirmed {
-                            daily_trade_count += 1;
-                            in_active_trade = true;
-                            active_trade_side = "SHORT";
-                            active_entry = c.close;
-                            active_sl = (c.high + curr_atr * 0.5).min(c.close + curr_atr * config.max_sl_atr);
-                            active_initial_sl = active_sl;
-                            let risk_dist = (active_sl - active_entry).max(0.01);
-                            active_tp1 = active_entry - risk_dist * config.rr_tp1;
-                            active_tp2 = active_entry - risk_dist * config.rr_tp2;
-                            active_tp3 = active_entry - risk_dist * config.rr_tp3;
-                            active_pos_size = if config.compound_capital { current_capital * (config.compound_percent / 100.0) } else { config.capital_per_trade };
-                            active_tp1_reached = false;
-                            active_tp2_reached = false;
-                            active_entry_time = c.time;
-                            active_signal_time = candles[bar_idx].time;
-                            active_score = score;
-                            active_sr_level = res_pivot.as_ref().or(closest_res.as_ref()).map(|p| p.price);
-                            active_sr_time = res_pivot.as_ref().or(closest_res.as_ref()).map(|p| p.time as u64);
-                            active_sr_type = Some("RESISTANCE".to_string());
-                            active_snapshot = Some(serde_json::json!({
-                                "signal": "SHORT",
-                                "strengthLong": 0.0,
-                                "strengthShort": score,
-                                "probUp": 20.0,
-                                "probDn": 80.0,
-                                "adxValue": (dmi.adx[i] * 10.0).round() / 10.0,
-                                "adxRegime": if dmi.adx[i] >= 35.0 { "TENDENCIA MUY FUERTE" } else if dmi.adx[i] >= 25.0 { "TENDENCIA FUERTE" } else { "RANGO" },
-                                "diBias": format!("BAJISTA (+{:.0} / -{:.0})", dmi.di_plus[i], dmi.di_minus[i]),
-                                "macdState": if macd.hist[i] < 0.0 { "BAJISTA" } else { "ALCISTA" },
-                                "rsiValue": (rsi[i] * 10.0).round() / 10.0,
-                                "rsiState": if rsi[i] <= 30.0 { "SOBREVENTA" } else if rsi[i] >= 70.0 { "SOBRECOMPRA" } else { "NEUTRAL" },
-                                "volumeRatio": (vol_ratio * 10.0).round() / 10.0,
-                                "volumeState": if vol_ratio >= config.very_high_volume { "MUY ALTO" } else if vol_ratio >= config.high_volume { "ALTO" } else { "NORMAL" },
-                                "trapState": "NINGUNA",
-                                "zoneState": "RETEST CONFIRMADO ✓",
-                                "currentEntry": active_entry,
-                                "currentSl": active_initial_sl,
-                                "currentTp1": active_tp1,
-                                "currentTp2": active_tp2,
-                                "currentTp3": active_tp3,
-                                "riskReward": "1 : 2.0 (DINÁMICO)",
-                                "tradeProgress": "EJECUTADO ✓",
-                                "totalTrades": trades.len() + 1,
-                                "winningTrades": tp1_hits,
-                                "losingTrades": sl_hits,
-                                "tp1Count": tp1_hits,
-                                "tp2Count": tp2_hits,
-                                "tp3Count": tp3_hits,
-                                "slNoTpCount": sl_hits,
-                                "winRate": if (tp1_hits + sl_hits) > 0 { ((tp1_hits as f64 / (tp1_hits + sl_hits) as f64) * 100.0).round() } else { 50.0 },
-                                "initialCapital": config.initial_capital,
-                                "capitalPerTrade": config.capital_per_trade,
-                                "currentCapital": current_capital,
-                                "totalPnl": current_capital - config.initial_capital,
-                                "pnlTp1": pnl_tp1_acc,
-                                "pnlTp2": pnl_tp2_acc,
-                                "pnlTp3": pnl_tp3_acc,
-                                "pnlSlTotal": pnl_sl_acc,
-                                "leverage": config.leverage,
-                                "riskPerTradePct": config.risk_percent,
-                                "analysisDays": config.analysis_days,
-                                "pnlPerDay": (current_capital - config.initial_capital) / (config.analysis_days as f64).max(1.0),
-                                "periodPnl": current_capital - config.initial_capital,
-                                "periodTrades": trades.len() + 1,
-                                "periodWinRate": if (tp1_hits + sl_hits) > 0 { ((tp1_hits as f64 / (tp1_hits + sl_hits) as f64) * 100.0).round() } else { 50.0 },
-                                "limitStatus": "ORDEN EJECUTADA ✓"
-                            }));
-                            retest_state = RetestState::Idle;
-                        }
-                    }
-                }
-            }
-        }
+        Calibration { bins, total_wins, total }
     }
 
-    // 3. Build Live Real-Time Dashboard Snapshot for Latest Candle
-    let last_i = n - 1;
-    let last_c = &candles[last_i];
-    let last_atr = atr[last_i].max(0.01);
-    let last_vol_ratio = last_c.volume.unwrap_or(1.0) / avg_vol[last_i].max(0.01);
-
-    let mut live_score_long = 0.0;
-    let mut live_score_short = 0.0;
-    if last_c.close > ema_50[last_i] && ema_50[last_i] > ema_200[last_i] { live_score_long += 25.0; }
-    if last_c.close < ema_50[last_i] && ema_50[last_i] < ema_200[last_i] { live_score_short += 25.0; }
-    if dmi.adx[last_i] > 25.0 {
-        if dmi.di_plus[last_i] > dmi.di_minus[last_i] { live_score_long += 20.0; }
-        if dmi.di_minus[last_i] > dmi.di_plus[last_i] { live_score_short += 20.0; }
+    /// Empirical win frequency for a setup scoring `score`, in percent.
+    fn probability(&self, score: f64) -> Option<f64> {
+        if self.total < CALIB_MIN_TOTAL {
+            return None;
+        }
+        let idx = ((score.clamp(0.0, 100.0)) / CALIB_BIN_WIDTH) as usize;
+        let (wins, count) = self.bins[idx];
+        if count >= CALIB_MIN_BIN {
+            Some((wins as f64 / count as f64) * 100.0)
+        } else {
+            // Not enough samples in this bucket: fall back to the base rate rather than
+            // extrapolating from a handful of trades.
+            Some((self.total_wins as f64 / self.total as f64) * 100.0)
+        }
     }
-    if macd.hist[last_i] > 0.0 { live_score_long += 15.0; } else { live_score_short += 15.0; }
-    if rsi[last_i] >= 45.0 && rsi[last_i] <= 70.0 { live_score_long += 15.0; }
-    if rsi[last_i] >= 30.0 && rsi[last_i] <= 55.0 { live_score_short += 15.0; }
-    if last_vol_ratio >= config.high_volume {
-        if last_c.close >= last_c.open { live_score_long += 15.0; } else { live_score_short += 15.0; }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Infer the bar interval from candle spacing, for funding proration.
+fn infer_timeframe_seconds(candles: &[Candle]) -> u64 {
+    let mut smallest = u64::MAX;
+    for w in candles.windows(2).take(200) {
+        let d = w[1].time.saturating_sub(w[0].time);
+        if d > 0 && d < smallest {
+            smallest = d;
+        }
     }
-
-    let total_strength = live_score_long + live_score_short;
-    let prob_up: f64 = if total_strength > 0.0 { ((live_score_long / total_strength) * 100.0f64).round() } else { 50.0 };
-    let prob_dn: f64 = 100.0f64 - prob_up;
-
-    let signal = if live_score_long >= config.minimum_score { "LONG".to_string() }
-                 else if live_score_short >= config.minimum_score { "SHORT".to_string() }
-                 else { "NEUTRAL".to_string() };
-
-    let adx_val = dmi.adx[last_i];
-    let adx_regime = if adx_val >= 35.0 { "TENDENCIA MUY FUERTE".to_string() }
-                     else if adx_val >= 25.0 { "TENDENCIA FUERTE".to_string() }
-                     else { "RANGO / CONSOLIDACIÓN".to_string() };
-
-    let di_bias = format!("{} (+{:.0} / -{:.0})", 
-        if dmi.di_plus[last_i] >= dmi.di_minus[last_i] { "ALCISTA" } else { "BAJISTA" },
-        dmi.di_plus[last_i], dmi.di_minus[last_i]);
-
-    let macd_state = if macd.macd[last_i] >= macd.signal[last_i] {
-        if macd.hist[last_i] > macd.hist[last_i - 1] { "ALCISTA+".to_string() } else { "ALCISTA".to_string() }
+    if smallest == u64::MAX {
+        900
     } else {
-        if macd.hist[last_i] < macd.hist[last_i - 1] { "BAJISTA+".to_string() } else { "BAJISTA".to_string() }
-    };
+        smallest
+    }
+}
 
-    let rsi_val = rsi[last_i];
-    let rsi_state = if rsi_val >= 70.0 { "SOBRECOMPRA".to_string() }
-                    else if rsi_val <= 30.0 { "SOBREVENTA".to_string() }
-                    else { "NEUTRAL".to_string() };
+fn adx_regime(adx: f64) -> String {
+    if adx >= 35.0 {
+        "TENDENCIA MUY FUERTE".to_string()
+    } else if adx >= 25.0 {
+        "TENDENCIA FUERTE".to_string()
+    } else {
+        "RANGO / CONSOLIDACION".to_string()
+    }
+}
 
-    let volume_state = if last_vol_ratio >= config.very_high_volume { "MUY ALTO".to_string() }
-                       else if last_vol_ratio >= config.high_volume { "ALTO".to_string() }
-                       else { "NORMAL".to_string() };
+fn rsi_state(rsi: f64) -> String {
+    if rsi >= 70.0 {
+        "SOBRECOMPRA".to_string()
+    } else if rsi <= 30.0 {
+        "SOBREVENTA".to_string()
+    } else {
+        "NEUTRAL".to_string()
+    }
+}
 
-    let trap_state = if last_vol_ratio >= 1.8 && (last_c.high - last_c.close.max(last_c.open)) > last_atr * 0.6 {
+fn volume_state(ratio: f64, cfg: &CryptoProConfig) -> String {
+    if ratio >= cfg.very_high_volume {
+        "MUY ALTO".to_string()
+    } else if ratio >= cfg.high_volume {
+        "ALTO".to_string()
+    } else {
+        "NORMAL".to_string()
+    }
+}
+
+fn trap_state(c: &Candle, atr: f64, vol_ratio: f64) -> String {
+    if vol_ratio >= 1.8 && (c.high - c.close.max(c.open)) > atr * 0.6 {
         "TRAMPA ALCISTA (Bull Trap)".to_string()
-    } else if last_vol_ratio >= 1.8 && (last_c.close.min(last_c.open) - last_c.low) > last_atr * 0.6 {
+    } else if vol_ratio >= 1.8 && (c.close.min(c.open) - c.low) > atr * 0.6 {
         "TRAMPA BAJISTA (Bear Trap)".to_string()
     } else {
         "NINGUNA".to_string()
-    };
+    }
+}
 
-    let zone_state = "RETEST / S&R".to_string();
+#[allow(clippy::too_many_arguments)]
+fn build_snapshot(
+    candles: &[Candle],
+    i: usize,
+    ind: &Indicators,
+    cfg: &CryptoProConfig,
+    inputs: &ScoreInputs,
+    scores: (f64, f64),
+    signal: &str,
+    zone_state: &str,
+    levels: (f64, f64, f64, f64, f64),
+    book: (f64, usize, f64, f64, f64),
+    calibration: Option<&Calibration>,
+) -> MarketSnapshot {
+    let c = &candles[i];
+    let atr = ind.atr[i].unwrap_or(0.0);
+    let adx = ind.dmi.adx[i].unwrap_or(0.0);
+    let di_plus = ind.dmi.di_plus[i].unwrap_or(0.0);
+    let di_minus = ind.dmi.di_minus[i].unwrap_or(0.0);
+    let hist = ind.macd.hist[i].unwrap_or(0.0);
+    let rsi = ind.rsi[i].unwrap_or(50.0);
 
-    // Calculate Global Win Rate and Period PnL
-    let total_trades_count = trades.len();
-    let winning_trades_count = trades.iter().filter(|t| t.status == "WIN" || t.status == "BE" || t.pnl > 0.0).count();
-    let losing_trades_count = trades.iter().filter(|t| t.status == "LOSS" || t.pnl < 0.0).count();
-    let win_rate = if total_trades_count > 0 { (winning_trades_count as f64 / total_trades_count as f64) * 100.0 } else { 0.0 };
+    let directional_score = if signal == "SHORT" { scores.1 } else { scores.0 };
+    let prob_up = calibration.and_then(|cal| cal.probability(directional_score));
 
-    let total_pnl = current_capital - config.initial_capital;
-
-    // Period slice (e.g. 15 days)
-    let period_seconds = (config.analysis_days as u64) * 86400;
-    let cutoff_time = last_c.time.saturating_sub(period_seconds);
-    let recent_trades: Vec<&Trade> = trades.iter().filter(|t| t.time >= cutoff_time).collect();
-    let period_trades_count = recent_trades.len();
-    let period_wins = recent_trades.iter().filter(|t| t.status == "WIN" || t.status == "BE" || t.pnl > 0.0).count();
-    let period_win_rate = if period_trades_count > 0 { (period_wins as f64 / period_trades_count as f64) * 100.0 } else { 0.0 };
-    let period_pnl: f64 = recent_trades.iter().map(|t| t.pnl).sum();
-    let pnl_per_day = period_pnl / (config.analysis_days.max(1) as f64);
-
-    let (current_entry, current_sl, current_tp1, current_tp2, current_tp3, limit_status) = if in_active_trade {
-        (active_entry, active_sl, active_tp1, active_tp2, active_tp3, "PRECIO TOCADO ✓".to_string())
-    } else {
-        match retest_state {
-            RetestState::ArmedLong { pivot_price, bar_idx: _, score: _ } => {
-                let sl = pivot_price - last_atr * config.atr_multiplier;
-                let risk = (pivot_price - sl).max(0.01);
-                (pivot_price, sl, pivot_price + risk * config.rr_tp1, pivot_price + risk * config.rr_tp2, pivot_price + risk * config.rr_tp3, "BUSCANDO PRECIO (LIMIT)".to_string())
-            }
-            RetestState::ArmedShort { pivot_price, bar_idx: _, score: _ } => {
-                let sl = pivot_price + last_atr * config.atr_multiplier;
-                let risk = (sl - pivot_price).max(0.01);
-                (pivot_price, sl, pivot_price - risk * config.rr_tp1, pivot_price - risk * config.rr_tp2, pivot_price - risk * config.rr_tp3, "BUSCANDO PRECIO (LIMIT)".to_string())
-            }
-            RetestState::Idle => (0.0, 0.0, 0.0, 0.0, 0.0, "—".to_string())
-        }
-    };
-
-    let dashboard = CryptoProDashboard {
-        signal,
-        strength_long: live_score_long,
-        strength_short: live_score_short,
+    MarketSnapshot {
+        signal: signal.to_string(),
+        strength_long: scores.0,
+        strength_short: scores.1,
         prob_up,
-        prob_dn,
-        adx_value: (adx_val * 10.0).round() / 10.0,
-        adx_regime,
-        di_bias,
-        macd_state,
-        rsi_value: (rsi_val * 10.0).round() / 10.0,
-        rsi_state,
-        volume_ratio: (last_vol_ratio * 10.0).round() / 10.0,
-        volume_state,
-        trap_state,
-        zone_state,
-        current_entry,
-        current_sl,
-        current_tp1,
-        current_tp2,
-        current_tp3,
-        risk_reward: format!("1 : {:.0}", config.rr_tp3),
-        trade_progress: if in_active_trade { "EN CURSO".to_string() } else { "BUSCANDO ENTRADA".to_string() },
-        total_trades: total_trades_count,
-        winning_trades: winning_trades_count,
-        losing_trades: losing_trades_count,
-        tp1_count: tp1_hits,
-        tp2_count: tp2_hits,
-        tp3_count: tp3_hits,
-        sl_no_tp_count: sl_hits,
-        win_rate: (win_rate * 10.0).round() / 10.0,
-        initial_capital: config.initial_capital,
-        capital_per_trade: config.capital_per_trade,
-        current_capital: (current_capital * 100.0).round() / 100.0,
-        total_pnl: (total_pnl * 100.0).round() / 100.0,
-        pnl_tp1: (pnl_tp1_acc * 100.0).round() / 100.0,
-        pnl_tp2: (pnl_tp2_acc * 100.0).round() / 100.0,
-        pnl_tp3: (pnl_tp3_acc * 100.0).round() / 100.0,
-        pnl_sl_total: (pnl_sl_acc * 100.0).round() / 100.0,
-        leverage: config.leverage,
-        risk_per_trade_pct: config.risk_percent,
-        analysis_days: config.analysis_days,
-        pnl_per_day: (pnl_per_day * 100.0).round() / 100.0,
-        period_pnl: (period_pnl * 100.0).round() / 100.0,
-        period_trades: period_trades_count,
-        period_win_rate: (period_win_rate * 10.0).round() / 10.0,
-        limit_status,
+        adx_value: (adx * 10.0).round() / 10.0,
+        adx_regime: adx_regime(adx),
+        di_bias: format!(
+            "{} (+{:.0} / -{:.0})",
+            if di_plus >= di_minus { "ALCISTA" } else { "BAJISTA" },
+            di_plus,
+            di_minus
+        ),
+        macd_state: if hist > 0.0 { "ALCISTA".to_string() } else { "BAJISTA".to_string() },
+        rsi_value: (rsi * 10.0).round() / 10.0,
+        rsi_state: rsi_state(rsi),
+        volume_ratio: (inputs.vol_ratio * 100.0).round() / 100.0,
+        volume_state: volume_state(inputs.vol_ratio, cfg),
+        trap_state: trap_state(c, atr, inputs.vol_ratio),
+        zone_state: zone_state.to_string(),
+        current_entry: levels.0,
+        current_sl: levels.1,
+        current_tp1: levels.2,
+        current_tp2: levels.3,
+        current_tp3: levels.4,
+        risk_reward: format!("1 : {:.1}", cfg.rr_tp3),
+        equity_at_entry: book.0,
+        trades_before: book.1,
+        position_qty: book.2,
+        position_notional: book.3,
+        risk_usd: book.4,
+    }
+}
+
+/// Result of sizing a candidate setup. `None` means the setup was rejected.
+struct Sizing {
+    qty: f64,
+    risk_usd: f64,
+}
+
+/// Position sizing by risk, capped by the notional the account is willing to carry, and
+/// rejected outright if the stop sits beyond the liquidation price.
+fn size_position(entry: f64, sl: f64, equity: f64, cfg: &CryptoProConfig) -> Option<Sizing> {
+    let sl_dist = (entry - sl).abs();
+    if sl_dist <= 0.0 || entry <= 0.0 || equity <= 0.0 {
+        return None;
+    }
+
+    // Liquidation guard: at `leverage`x, an adverse move of roughly `1/leverage` wipes the
+    // margin. A stop further away than that would never actually be reached - the
+    // exchange closes the position first - so the setup is not tradeable as configured.
+    let sl_dist_pct = sl_dist / entry;
+    let liquidation_pct = (1.0 / cfg.leverage.max(1.0)) - (cfg.maintenance_margin_pct / 100.0);
+    if sl_dist_pct >= liquidation_pct {
+        return None;
+    }
+
+    let risk_budget = equity * (cfg.risk_percent / 100.0);
+    let mut qty = risk_budget / sl_dist;
+
+    // Cap by the margin the account allocates to a trade.
+    let margin = if cfg.compound_capital {
+        equity * (cfg.compound_percent / 100.0)
+    } else {
+        cfg.capital_per_trade
+    };
+    let max_notional = margin.max(0.0) * cfg.leverage.max(1.0);
+    let max_qty = max_notional / entry;
+    if qty > max_qty {
+        qty = max_qty;
+    }
+
+    if qty <= 0.0 || !qty.is_finite() {
+        return None;
+    }
+
+    Some(Sizing { qty, risk_usd: qty * sl_dist })
+}
+
+/// A single event resolved for one bar. At most one per bar, which is what structurally
+/// prevents the old engine's cascade of TP1+TP2+TP3 inside one candle.
+enum BarEvent {
+    Target(usize),
+    Stop,
+}
+
+// ---------------------------------------------------------------------------
+// Main entry point
+// ---------------------------------------------------------------------------
+
+pub fn analyze_crypto_pro(candles: &[Candle], config: &CryptoProConfig) -> CryptoProResult {
+    let n = candles.len();
+    let cost_model = CostModel::new(&config.costs);
+    let policy = IntrabarPolicy::parse(&config.intrabar_policy);
+    let tf_seconds = infer_timeframe_seconds(candles);
+
+    let ind = Indicators {
+        ema_fast: calculate_ema(candles, config.ema_fast),
+        ema_slow: calculate_ema(candles, config.ema_slow),
+        atr: calculate_atr(candles, config.atr_length),
+        avg_vol: calculate_avg_volume(candles, config.volume_length),
+        rsi: calculate_rsi(candles, config.rsi_length),
+        macd: calculate_macd(candles, 12, 26, 9),
+        dmi: calculate_dmi_adx(candles, config.adx_length),
+    };
+    let pivots = calculate_pivots(candles, config.pivot_left, config.pivot_right);
+
+    let mut trades: Vec<Trade> = Vec::new();
+    let mut equity_curve: Vec<EquityPoint> = Vec::with_capacity(n);
+    let mut realized_equity = config.initial_capital;
+    let mut totals = CostBreakdown::default();
+
+    let mut tp_counts = [0usize; 3];
+    let mut sl_no_tp = 0usize;
+    let mut ruined = false;
+
+    let mut position: Option<Position> = None;
+    let mut retest = RetestState::Idle;
+    let mut trade_id = 1usize;
+    let mut cooldown_until = 0usize;
+    let mut current_day: Option<u64> = None;
+    let mut trades_today = 0usize;
+
+    // Confirmed-pivot book. A pivot only enters once `confirmed_at_index <= i`, which is
+    // what makes the S/R component causal; the old code scanned the whole vector and took
+    // `.last()`, happily selecting pivots thousands of bars in the future.
+    let mut pivot_cursor = 0usize;
+    let mut sr_book: VecDeque<PivotLevel> = VecDeque::new();
+    let sr_capacity = config.sr_lookback_pivots.max(1);
+
+    // Warm-up: no bar is evaluated until every indicator the score needs is defined.
+    let warmup = [
+        config.ema_slow,
+        config.ema_fast,
+        config.atr_length + 1,
+        config.volume_length,
+        config.rsi_length + 1,
+        config.adx_length * 2,
+        26 + 9,
+        config.pivot_left + config.pivot_right + 1,
+    ]
+    .into_iter()
+    .max()
+    .unwrap_or(200);
+
+    for i in 0..n {
+        let c = &candles[i];
+
+        // Admit pivots that have become knowable as of this bar.
+        while pivot_cursor < pivots.len() && pivots[pivot_cursor].confirmed_at_index <= i {
+            sr_book.push_back(pivots[pivot_cursor].clone());
+            if sr_book.len() > sr_capacity {
+                sr_book.pop_front();
+            }
+            pivot_cursor += 1;
+        }
+
+        // --- Manage the open position first, so a position entered on bar i is never
+        // --- also resolved on bar i.
+        if let Some(pos) = position.as_mut() {
+            let dir = pos.side.dir();
+            let favorable = if pos.side == Side::Long { c.high } else { c.low };
+            let adverse = if pos.side == Side::Long { c.low } else { c.high };
+
+            // Excursions, in R, measured on the full initial size.
+            if pos.risk_usd > 0.0 {
+                let fav_r = dir * (favorable - pos.entry) * pos.qty_total / pos.risk_usd;
+                let adv_r = dir * (adverse - pos.entry) * pos.qty_total / pos.risk_usd;
+                if fav_r > pos.mfe_r {
+                    pos.mfe_r = fav_r;
+                }
+                if adv_r < pos.mae_r {
+                    pos.mae_r = adv_r;
+                }
+            }
+
+            // Funding accrues on the notional actually still open.
+            let funding = cost_model.funding_cost(pos.qty_open * c.close, tf_seconds);
+            pos.costs.add(&funding);
+            pos.realized_usd -= funding.total;
+
+            // Which levels did this bar touch?
+            let next_tp = pos.tp_hit.iter().position(|hit| !hit);
+            let tp_touched = next_tp.filter(|&k| dir * (favorable - pos.tp[k]) >= 0.0);
+            let sl_touched = dir * (adverse - pos.sl) <= 0.0;
+
+            let event = match (tp_touched, sl_touched) {
+                (Some(k), true) => Some(match policy {
+                    IntrabarPolicy::SlFirst => BarEvent::Stop,
+                    IntrabarPolicy::TpFirst => BarEvent::Target(k),
+                    IntrabarPolicy::NearestOpen => {
+                        if (pos.tp[k] - c.open).abs() <= (pos.sl - c.open).abs() {
+                            BarEvent::Target(k)
+                        } else {
+                            BarEvent::Stop
+                        }
+                    }
+                }),
+                (Some(k), false) => Some(BarEvent::Target(k)),
+                (None, true) => Some(BarEvent::Stop),
+                (None, false) => None,
+            };
+
+            let mut closed_now: Option<(String, f64)> = None;
+
+            match event {
+                Some(BarEvent::Target(k)) => {
+                    let fraction = match k {
+                        0 => config.tp1_fraction,
+                        1 => config.tp2_fraction,
+                        _ => 1.0,
+                    };
+                    // The last tranche always takes whatever remains, so rounding never
+                    // strands a sliver of position.
+                    let qty_chunk = if k == 2 {
+                        pos.qty_open
+                    } else {
+                        (pos.qty_total * fraction).min(pos.qty_open)
+                    };
+
+                    let price = pos.tp[k];
+                    let gross = dir * (price - pos.entry) * qty_chunk;
+                    // Targets rest in the book, so they fill as maker.
+                    let cost = cost_model.fill_cost(qty_chunk * price, FillKind::Limit);
+
+                    pos.realized_usd += gross - cost.total;
+                    pos.costs.add(&cost);
+                    pos.qty_open -= qty_chunk;
+                    pos.tp_hit[k] = true;
+                    pos.tp_time[k] = c.time;
+                    tp_counts[k] += 1;
+
+                    // Stepped stop: breakeven after TP1, up to TP1 after TP2.
+                    if k == 0 {
+                        pos.sl = pos.entry;
+                    } else if k == 1 {
+                        pos.sl = pos.tp[0];
+                    }
+
+                    if pos.qty_open <= pos.qty_total * 1e-9 || k == 2 {
+                        closed_now = Some(("TP3".to_string(), price));
+                    }
+                }
+                Some(BarEvent::Stop) => {
+                    let qty_chunk = pos.qty_open;
+                    let price = pos.sl;
+                    let gross = dir * (price - pos.entry) * qty_chunk;
+                    // Stops are market orders: taker fee plus slippage.
+                    let cost = cost_model.fill_cost(qty_chunk * price, FillKind::Market);
+
+                    pos.realized_usd += gross - cost.total;
+                    pos.costs.add(&cost);
+                    pos.qty_open = 0.0;
+
+                    let reason = if !pos.tp_hit[0] {
+                        sl_no_tp += 1;
+                        "SL".to_string()
+                    } else if pos.tp_hit[1] {
+                        "TRAIL TP1".to_string()
+                    } else {
+                        "BE".to_string()
+                    };
+                    closed_now = Some((reason, price));
+                }
+                None => {}
+            }
+
+            if let Some((reason, exit_price)) = closed_now {
+                let pos = position.take().expect("position present");
+                realized_equity += pos.realized_usd;
+                totals.add(&pos.costs);
+                if realized_equity <= 0.0 {
+                    ruined = true;
+                }
+                trades.push(finalize_trade(
+                    &pos, trade_id, &reason, exit_price, c.time, i, realized_equity,
+                ));
+                trade_id += 1;
+                cooldown_until = i + config.cooldown_bars;
+                retest = RetestState::Idle;
+            }
+        }
+
+        // Mark-to-market equity for this bar.
+        let (mtm, in_position) = match position.as_ref() {
+            Some(p) => (
+                realized_equity
+                    + p.realized_usd
+                    + p.side.dir() * (c.close - p.entry) * p.qty_open,
+                true,
+            ),
+            None => (realized_equity, false),
+        };
+        equity_curve.push(EquityPoint { time: c.time, value: mtm, in_position });
+
+        if ruined {
+            continue;
+        }
+
+        // --- Signal generation ---
+        if i < warmup {
+            continue;
+        }
+
+        let day_id = c.time / 86_400;
+        if current_day != Some(day_id) {
+            current_day = Some(day_id);
+            trades_today = 0;
+        }
+
+        let (atr_now, avg_vol_now) = match (ind.atr[i], ind.avg_vol[i]) {
+            (Some(a), Some(v)) if a > 0.0 && v > 0.0 => (a, v),
+            _ => continue,
+        };
+        let vol_ratio = c.volume.unwrap_or(0.0) / avg_vol_now;
+
+        let (near_support, nearest_support) = nearest_pivot(&sr_book, false, c.close, atr_now);
+        let (near_resistance, nearest_resistance) =
+            nearest_pivot(&sr_book, true, c.close, atr_now);
+
+        let inputs = ScoreInputs { near_support, near_resistance, vol_ratio };
+        let scores = match score_bar(candles, i, &ind, config, &inputs) {
+            Some(s) => s,
+            None => continue,
+        };
+
+        if position.is_some() || i < cooldown_until || trades_today >= config.max_trades_per_day {
+            continue;
+        }
+
+        // Resolve the retest state machine into a concrete entry decision.
+        let entry_decision: Option<(Side, f64, f64, f64, u64, &str)> = match retest {
+            RetestState::Idle => {
+                let candidate = if scores.0 >= config.minimum_score {
+                    Some((Side::Long, scores.0))
+                } else if scores.1 >= config.minimum_score {
+                    Some((Side::Short, scores.1))
+                } else {
+                    None
+                };
+
+                match candidate {
+                    Some((side, score)) if config.wait_for_retest => {
+                        retest = RetestState::Armed {
+                            side,
+                            anchor_price: c.close,
+                            bar_idx: i,
+                            score,
+                        };
+                        None
+                    }
+                    Some((side, score)) => {
+                        let sl = stop_for_direct_entry(c.close, side, atr_now, config);
+                        Some((side, c.close, sl, score, c.time, "DIRECTO (CONFLUENCIA)"))
+                    }
+                    None => None,
+                }
+            }
+            RetestState::Armed { side, anchor_price, bar_idx, score } => {
+                if i.saturating_sub(bar_idx) > config.max_wait_bars {
+                    retest = RetestState::Idle;
+                    None
+                } else {
+                    let dir = side.dir();
+                    let extreme = if side == Side::Long { c.low } else { c.high };
+                    let pullback = dir * (anchor_price - extreme);
+                    let in_band = pullback >= atr_now * config.min_pullback_atr
+                        && pullback <= atr_now * config.max_pullback_atr;
+
+                    let recovered = if config.require_recovery_candle {
+                        match side {
+                            Side::Long => c.close > c.open && c.close > candles[i - 1].high,
+                            Side::Short => c.close < c.open && c.close < candles[i - 1].low,
+                        }
+                    } else {
+                        true
+                    };
+
+                    if in_band && recovered {
+                        let sl = stop_for_retest_entry(c, side, atr_now, config);
+                        let signal_time = candles[bar_idx].time;
+                        retest = RetestState::Idle;
+                        Some((side, c.close, sl, score, signal_time, "RETEST CONFIRMADO"))
+                    } else {
+                        None
+                    }
+                }
+            }
+        };
+
+        let Some((side, entry, sl, score, signal_time, zone)) = entry_decision else {
+            continue;
+        };
+
+        let Some(sizing) = size_position(entry, sl, realized_equity, config) else {
+            continue;
+        };
+
+        let dir = side.dir();
+        let risk_dist = (entry - sl).abs();
+        let tp = [
+            entry + dir * risk_dist * config.rr_tp1,
+            entry + dir * risk_dist * config.rr_tp2,
+            entry + dir * risk_dist * config.rr_tp3,
+        ];
+
+        // Entry is a market order at the close of the signal bar.
+        let entry_cost = cost_model.fill_cost(sizing.qty * entry, FillKind::Market);
+        let mut costs = CostBreakdown::default();
+        costs.add(&entry_cost);
+
+        let (sr_level, sr_time, sr_type) = match side {
+            Side::Long => (
+                nearest_support.as_ref().map(|p| p.price),
+                nearest_support.as_ref().map(|p| p.time),
+                Some("SUPPORT".to_string()),
+            ),
+            Side::Short => (
+                nearest_resistance.as_ref().map(|p| p.price),
+                nearest_resistance.as_ref().map(|p| p.time),
+                Some("RESISTANCE".to_string()),
+            ),
+        };
+
+        let snapshot = build_snapshot(
+            candles,
+            i,
+            &ind,
+            config,
+            &inputs,
+            scores,
+            side.as_str(),
+            zone,
+            (entry, sl, tp[0], tp[1], tp[2]),
+            (
+                realized_equity,
+                trades.len(),
+                sizing.qty,
+                sizing.qty * entry,
+                sizing.risk_usd,
+            ),
+            None, // calibration needs the finished backtest; filled in post-hoc below
+        );
+
+        trades_today += 1;
+        position = Some(Position {
+            side,
+            entry,
+            initial_sl: sl,
+            sl,
+            tp,
+            tp_hit: [false; 3],
+            tp_time: [0; 3],
+            qty_total: sizing.qty,
+            qty_open: sizing.qty,
+            risk_usd: sizing.risk_usd,
+            realized_usd: -entry_cost.total,
+            costs,
+            entry_index: i,
+            entry_time: c.time,
+            signal_time,
+            score,
+            equity_at_entry: realized_equity,
+            mae_r: 0.0,
+            mfe_r: 0.0,
+            snapshot,
+            sr_level,
+            sr_time,
+            sr_type,
+        });
+    }
+
+    // A position still open when the data ends is closed at the last close and marked
+    // OPEN_MTM. The old engine dropped it entirely while keeping its partial profits,
+    // which quietly censored the losers.
+    if let Some(pos) = position.take() {
+        if n > 0 {
+            let last = &candles[n - 1];
+            let dir = pos.side.dir();
+            let qty_chunk = pos.qty_open;
+            let gross = dir * (last.close - pos.entry) * qty_chunk;
+            let cost = cost_model.fill_cost(qty_chunk * last.close, FillKind::Market);
+
+            let mut pos = pos;
+            pos.realized_usd += gross - cost.total;
+            pos.costs.add(&cost);
+            pos.qty_open = 0.0;
+
+            realized_equity += pos.realized_usd;
+            totals.add(&pos.costs);
+
+            let mut trade = finalize_trade(
+                &pos,
+                trade_id,
+                "END_OF_DATA",
+                last.close,
+                last.time,
+                n - 1,
+                realized_equity,
+            );
+            trade.status = "OPEN_MTM".to_string();
+            trades.push(trade);
+
+            if let Some(point) = equity_curve.last_mut() {
+                point.value = realized_equity;
+            }
+        }
+    }
+
+    // Calibration is only knowable once the run is finished, so per-trade snapshots get
+    // their probability filled in here rather than being invented at entry time.
+    let calibration = Calibration::build(&trades);
+    for t in trades.iter_mut() {
+        if let Some(raw) = t.dashboard_snapshot.take() {
+            if let Ok(mut snap) = serde_json::from_value::<MarketSnapshot>(raw) {
+                let directional = if snap.signal == "SHORT" {
+                    snap.strength_short
+                } else {
+                    snap.strength_long
+                };
+                snap.prob_up = calibration.probability(directional);
+                t.dashboard_snapshot = serde_json::to_value(&snap).ok();
+            }
+        }
+    }
+
+    let dashboard = build_dashboard(
+        candles,
+        &ind,
+        config,
+        &trades,
+        &equity_curve,
+        realized_equity,
+        &totals,
+        &tp_counts,
+        sl_no_tp,
+        ruined,
+        &sr_book,
+        &calibration,
+    );
+
+    CryptoProResult { dashboard, trades, equity_curve }
+}
+
+/// Nearest confirmed pivot on the requested side, plus whether it sits within 1.5 ATR.
+fn nearest_pivot(
+    book: &VecDeque<PivotLevel>,
+    want_high: bool,
+    price: f64,
+    atr: f64,
+) -> (bool, Option<PivotLevel>) {
+    let mut best: Option<&PivotLevel> = None;
+    let mut best_dist = f64::MAX;
+
+    for p in book.iter() {
+        if p.is_high != want_high {
+            continue;
+        }
+        // Support sits at or below price, resistance at or above.
+        if want_high && p.price < price {
+            continue;
+        }
+        if !want_high && p.price > price {
+            continue;
+        }
+        let dist = (p.price - price).abs();
+        if dist < best_dist {
+            best_dist = dist;
+            best = Some(p);
+        }
+    }
+
+    let near = best.is_some() && best_dist <= atr * 1.5;
+    (near, best.cloned())
+}
+
+fn stop_for_direct_entry(entry: f64, side: Side, atr: f64, cfg: &CryptoProConfig) -> f64 {
+    let dist = (atr * cfg.atr_multiplier).min(atr * cfg.max_sl_atr);
+    entry - side.dir() * dist
+}
+
+fn stop_for_retest_entry(c: &Candle, side: Side, atr: f64, cfg: &CryptoProConfig) -> f64 {
+    let cap = atr * cfg.max_sl_atr;
+    match side {
+        Side::Long => {
+            let structural = c.low - atr * 0.5;
+            structural.max(c.close - cap)
+        }
+        Side::Short => {
+            let structural = c.high + atr * 0.5;
+            structural.min(c.close + cap)
+        }
+    }
+}
+
+fn finalize_trade(
+    pos: &Position,
+    id: usize,
+    reason: &str,
+    exit_price: f64,
+    exit_time: u64,
+    exit_index: usize,
+    _equity_after: f64,
+) -> Trade {
+    let pnl_usd = pos.realized_usd;
+    let pnl_r = if pos.risk_usd > 0.0 { pnl_usd / pos.risk_usd } else { 0.0 };
+    let status = if pnl_usd > 0.0 {
+        "WIN"
+    } else if pnl_usd < 0.0 {
+        "LOSS"
+    } else {
+        "BE"
     };
 
-    CryptoProResult {
-        dashboard,
-        trades,
+    Trade {
+        id: format!("PRO-{}", id),
+        trade_type: pos.side.as_str().to_string(),
+        status: status.to_string(),
+        entry: pos.entry,
+        sl: pos.initial_sl,
+        tp: pos.tp[1],
+        tp1: Some(pos.tp[0]),
+        tp2: Some(pos.tp[1]),
+        tp3: Some(pos.tp[2]),
+        signal_time: pos.signal_time,
+        time: pos.entry_time,
+
+        pnl: pnl_r,
+        pnl_usd,
+        pnl_percent: if pos.equity_at_entry > 0.0 {
+            pnl_usd / pos.equity_at_entry * 100.0
+        } else {
+            0.0
+        },
+        risk_usd: pos.risk_usd,
+        qty: pos.qty_total,
+        cost_usd: pos.costs.total,
+        mae_r: pos.mae_r,
+        mfe_r: pos.mfe_r,
+        bars_held: exit_index.saturating_sub(pos.entry_index),
+        equity_at_entry: pos.equity_at_entry,
+
+        desc: format!(
+            "CryptoPRO {}: {} @ ${:.2} ({:+.2}R)",
+            pos.side.as_str(),
+            reason,
+            exit_price,
+            pnl_r
+        ),
+        entry_time: Some(pos.entry_time),
+        exit_time: Some(exit_time),
+        setup_score: Some(pos.score),
+        dashboard_snapshot: serde_json::to_value(&pos.snapshot).ok(),
+        sr_level: pos.sr_level,
+        sr_time: pos.sr_time,
+        sr_type: pos.sr_type.clone(),
+        initial_sl: Some(pos.initial_sl),
+        trailing_sl: if pos.tp_hit[0] { Some(pos.sl) } else { None },
+        tp1_time: if pos.tp_hit[0] { Some(pos.tp_time[0]) } else { None },
+        tp2_time: if pos.tp_hit[1] { Some(pos.tp_time[1]) } else { None },
+        tp3_time: if pos.tp_hit[2] { Some(pos.tp_time[2]) } else { None },
+        exit_reason: Some(reason.to_string()),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_dashboard(
+    candles: &[Candle],
+    ind: &Indicators,
+    cfg: &CryptoProConfig,
+    trades: &[Trade],
+    equity_curve: &[EquityPoint],
+    equity: f64,
+    totals: &CostBreakdown,
+    tp_counts: &[usize; 3],
+    sl_no_tp: usize,
+    ruined: bool,
+    sr_book: &VecDeque<PivotLevel>,
+    calibration: &Calibration,
+) -> CryptoProDashboard {
+    let n = candles.len();
+    if n == 0 {
+        return CryptoProDashboard {
+            initial_capital: cfg.initial_capital,
+            current_capital: cfg.initial_capital,
+            leverage: cfg.leverage,
+            risk_per_trade_pct: cfg.risk_percent,
+            analysis_days: cfg.analysis_days,
+            limit_status: "SIN DATOS".to_string(),
+            trade_progress: "SIN DATOS".to_string(),
+            ..Default::default()
+        };
+    }
+
+    let i = n - 1;
+    let c = &candles[i];
+    let atr_now = ind.atr[i].unwrap_or(0.0);
+    let avg_vol_now = ind.avg_vol[i].unwrap_or(0.0);
+    let vol_ratio = if avg_vol_now > 0.0 { c.volume.unwrap_or(0.0) / avg_vol_now } else { 0.0 };
+
+    let (near_support, _) = nearest_pivot(sr_book, false, c.close, atr_now.max(f64::EPSILON));
+    let (near_resistance, _) = nearest_pivot(sr_book, true, c.close, atr_now.max(f64::EPSILON));
+    let inputs = ScoreInputs { near_support, near_resistance, vol_ratio };
+
+    // Identical scoring path to the backtest, so the panel can no longer disagree with
+    // the trades the engine would actually have taken.
+    let scores = score_bar(candles, i, ind, cfg, &inputs).unwrap_or((0.0, 0.0));
+    let signal = if scores.0 >= cfg.minimum_score {
+        "LONG"
+    } else if scores.1 >= cfg.minimum_score {
+        "SHORT"
+    } else {
+        "NEUTRAL"
+    };
+
+    let (entry, sl, tp1, tp2, tp3) = if signal == "NEUTRAL" || atr_now <= 0.0 {
+        (0.0, 0.0, 0.0, 0.0, 0.0)
+    } else {
+        let side = if signal == "LONG" { Side::Long } else { Side::Short };
+        let dir = side.dir();
+        let sl = stop_for_direct_entry(c.close, side, atr_now, cfg);
+        let risk = (c.close - sl).abs();
+        (
+            c.close,
+            sl,
+            c.close + dir * risk * cfg.rr_tp1,
+            c.close + dir * risk * cfg.rr_tp2,
+            c.close + dir * risk * cfg.rr_tp3,
+        )
+    };
+
+    let snapshot = build_snapshot(
+        candles,
+        i,
+        ind,
+        cfg,
+        &inputs,
+        scores,
+        signal,
+        "RETEST / S&R",
+        (entry, sl, tp1, tp2, tp3),
+        (equity, trades.len(), 0.0, 0.0, 0.0),
+        Some(calibration),
+    );
+
+    let wins = trades.iter().filter(|t| t.pnl_usd > 0.0).count();
+    let losses = trades.iter().filter(|t| t.pnl_usd < 0.0).count();
+    let breakeven = trades.len() - wins - losses;
+    // Breakeven trades are their own category. Counting them as wins is what inflated the
+    // old win rate; the denominator here is every trade the engine took.
+    let win_rate = if !trades.is_empty() {
+        (wins as f64 / trades.len() as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    let total_pnl = equity - cfg.initial_capital;
+    let total_pnl_r: f64 = trades.iter().map(|t| t.pnl).sum();
+
+    // Trailing window, in the same units as everything else: account currency.
+    let period_seconds = (cfg.analysis_days as u64).saturating_mul(86_400);
+    let cutoff = c.time.saturating_sub(period_seconds);
+    let recent: Vec<&Trade> = trades.iter().filter(|t| t.time >= cutoff).collect();
+    let period_pnl: f64 = recent.iter().map(|t| t.pnl_usd).sum();
+    let period_wins = recent.iter().filter(|t| t.pnl_usd > 0.0).count();
+    let period_win_rate = if !recent.is_empty() {
+        (period_wins as f64 / recent.len() as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    // Divide by the days actually covered, not by a fixed constant.
+    let span_days = equity_curve
+        .first()
+        .zip(equity_curve.last())
+        .map(|(a, b)| (b.time.saturating_sub(a.time) as f64) / 86_400.0)
+        .unwrap_or(0.0);
+    let effective_days = span_days.min(cfg.analysis_days as f64).max(1.0);
+
+    CryptoProDashboard {
+        snapshot,
+        trade_progress: "BUSCANDO ENTRADA".to_string(),
+        limit_status: if ruined {
+            "CUENTA LIQUIDADA".to_string()
+        } else if signal == "NEUTRAL" {
+            "SIN SETUP".to_string()
+        } else {
+            "SETUP ACTIVO".to_string()
+        },
+
+        total_trades: trades.len(),
+        winning_trades: wins,
+        losing_trades: losses,
+        breakeven_trades: breakeven,
+        tp1_count: tp_counts[0],
+        tp2_count: tp_counts[1],
+        tp3_count: tp_counts[2],
+        sl_no_tp_count: sl_no_tp,
+        win_rate: (win_rate * 10.0).round() / 10.0,
+
+        initial_capital: cfg.initial_capital,
+        capital_per_trade: cfg.capital_per_trade,
+        current_capital: (equity * 100.0).round() / 100.0,
+        total_pnl: (total_pnl * 100.0).round() / 100.0,
+        total_pnl_r: (total_pnl_r * 100.0).round() / 100.0,
+        total_costs: (totals.total * 100.0).round() / 100.0,
+        cost_breakdown: totals.clone(),
+        leverage: cfg.leverage,
+        risk_per_trade_pct: cfg.risk_percent,
+        ruined,
+
+        analysis_days: cfg.analysis_days,
+        pnl_per_day: ((period_pnl / effective_days) * 100.0).round() / 100.0,
+        period_pnl: (period_pnl * 100.0).round() / 100.0,
+        period_trades: recent.len(),
+        period_win_rate: (period_win_rate * 10.0).round() / 10.0,
     }
 }

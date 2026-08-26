@@ -112,11 +112,11 @@
                 Realized
             </div>
             <div
-                class="text-sm font-mono font-bold {metrics.realizedPnL >= 0
+                class="text-sm font-mono font-bold {metrics.totalPnl >= 0
                     ? 'text-bull'
                     : 'text-bear'}"
             >
-                ${metrics.realizedPnL?.toFixed(2) || "0.00"}
+                ${metrics.totalPnl?.toFixed(2) || "0.00"}
             </div>
         </div>
         <div class="bg-panel border border-border/50 p-3 rounded-lg">
@@ -124,11 +124,11 @@
                 Floating
             </div>
             <div
-                class="text-sm font-mono font-bold {metrics.unrealizedPnL >= 0
+                class="text-sm font-mono font-bold {metrics.totalCosts >= 0
                     ? 'text-bull'
                     : 'text-bear'}"
             >
-                ${metrics.unrealizedPnL?.toFixed(2) || "0.00"}
+                ${metrics.totalCosts?.toFixed(2) || "0.00"}
             </div>
         </div>
     </div>
@@ -149,7 +149,7 @@
         <div class="metric-card">
             <span class="metric-label">DD%</span><span
                 class="metric-value font-mono text-bear"
-                >{metrics.maxDrawdown?.toFixed(2) || "---"}%</span
+                >{metrics.drawdown?.maxPct?.toFixed(2) || "---"}%</span
             >
         </div>
         <div class="metric-card">

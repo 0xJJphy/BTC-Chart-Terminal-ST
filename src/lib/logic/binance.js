@@ -1,4 +1,4 @@
-import { APP, state, addToLog } from '../stores/app.js';
+import { APP, state, liveCandle, addToLog } from '../stores/app.js';
 import { get } from 'svelte/store';
 
 export async function fetchKlinesBatch(endTime) {
@@ -93,32 +93,40 @@ export function startWebSocket(callbacks = {}) {
                 txnCount: parseInt(k.n, 10) || 0
             };
 
-            state.update(s => {
-                let candles = [...s.candles];
-                if (candles.length === 0) {
-                    candles.push(candle);
-                    return { ...s, candles, livePrice: candle.close.toFixed(2) };
-                }
+            // Mutate the tail in place and publish only the changed candle.
+            //
+            // This used to clone the whole candle array and push a new store value on every
+            // tick. At 240k candles that is a 240k-object copy several times a second, and
+            // it forced every subscriber - including the chart's full `setData()` path - to
+            // re-run. The array identity now only changes when candles are actually loaded.
+            const s = get(state);
 
-                const last = candles[candles.length - 1];
-                if (last && candle.time < last.time) return s;
+            // In replay mode `state.candles` points at the cached full-history array.
+            // Appending live candles to it would corrupt the backtest dataset for every
+            // later run, so only track the price while a replay is on screen.
+            if (s.isReplayMode) {
+                state.update(prev => ({ ...prev, livePrice: candle.close.toFixed(2) }));
+                return;
+            }
 
-                if (last && candle.time === last.time) {
-                    candles[candles.length - 1] = candle;
-                } else {
-                    candles.push(candle);
-                }
+            const candles = s.candles;
+            const last = candles.length > 0 ? candles[candles.length - 1] : null;
 
-                if (currentCallbacks.onCandleUpdate) currentCallbacks.onCandleUpdate(candle);
+            if (last && candle.time < last.time) return; // stale tick, ignore
 
-                return {
-                    ...s,
-                    candles,
-                    livePrice: candle.close.toFixed(2)
-                };
-            });
+            let appended = false;
+            if (!last || candle.time > last.time) {
+                candles.push(candle);
+                appended = true;
+            } else {
+                candles[candles.length - 1] = candle;
+            }
 
-            if (currentCallbacks.onTick) currentCallbacks.onTick();
+            liveCandle.set(candle);
+            state.update(prev => ({ ...prev, livePrice: candle.close.toFixed(2) }));
+
+            if (currentCallbacks.onCandleUpdate) currentCallbacks.onCandleUpdate(candle, appended);
+            if (currentCallbacks.onTick) currentCallbacks.onTick(candle, appended);
         } catch (e) {
             console.error("[WebSocket] Message parsing error:", e);
         }

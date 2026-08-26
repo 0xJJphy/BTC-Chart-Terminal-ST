@@ -2,7 +2,7 @@
     import { onMount, onDestroy } from "svelte";
     import { get } from "svelte/store";
     import { createChart, CrosshairMode } from "lightweight-charts";
-    import { state, APP } from "../lib/stores/app.js";
+    import { state, liveCandle, APP } from "../lib/stores/app.js";
     import {
         BoxPrimitive,
         TrendLinePrimitive,
@@ -10,11 +10,11 @@
         TradeExecutionPrimitive,
     } from "../lib/logic/chart_utils.js";
     import { getTradeMarkers } from "../lib/logic/replay.js";
+    // RSI / MACD / ADX / CVD now come from the Rust engine via `state.indicatorSeries`
+    // and `state.cvdData`. The JS reimplementations seeded their EMAs differently, so the
+    // indicator drawn on the chart was not the one the strategy scored with.
+    // DER and Fragility have no series form in Rust yet, so they stay here.
     import {
-        calculateRSI,
-        calculateMACD,
-        calculateDMI_ADX,
-        calculateAnchoredCVD,
         calculateDER,
         calculateFragility,
         calculateVolumeDelta,
@@ -280,7 +280,11 @@
         const tTime = t ? (t.entryTime || t.signalTime || t.time) : null;
 
         if (paneKey === "CVD" && inst.series.cvd) {
-            const cvdRes = calculateAnchoredCVD(candles, s.cvdAnchor || 'daily', 20);
+            const pts = s.cvdData?.points || [];
+            const cvdRes = {
+                cvd: pts.map((p) => ({ time: p.time, value: p.cvd })),
+                sma: pts.map((p) => ({ time: p.time, value: p.cvdSma })),
+            };
             if (cvdRes.cvd.length > 0) {
                 inst.series.cvd.setData(cvdRes.cvd);
                 inst.series.sma.setData(cvdRes.sma);
@@ -302,7 +306,14 @@
                 }
             }
         } else if (paneKey === "Z_SCORE" && inst.series.hist) {
-            const cvdRes = calculateAnchoredCVD(candles, s.cvdAnchor || 'daily', 20);
+            const zPts = s.cvdData?.points || [];
+            const cvdRes = {
+                zScore: zPts.map((p) => ({
+                    time: p.time,
+                    value: p.zScore,
+                    color: p.zScore >= 0 ? "rgba(34, 197, 94, 0.7)" : "rgba(239, 68, 68, 0.7)",
+                })),
+            };
             if (cvdRes.zScore.length > 0) {
                 inst.series.hist.setData(cvdRes.zScore);
 
@@ -365,7 +376,7 @@
                 }
             }
         } else if (paneKey === "RSI" && inst.series.rsi) {
-            const rsiData = calculateRSI(candles, 14);
+            const rsiData = s.indicatorSeries?.rsi || [];
             if (rsiData.length > 0) {
                 inst.series.rsi.setData(rsiData);
 
@@ -387,7 +398,15 @@
                 }
             }
         } else if (paneKey === "MACD" && inst.series.macd) {
-            const macdRes = calculateMACD(candles, 12, 26, 9);
+            const ind = s.indicatorSeries;
+            const macdRes = {
+                macd: ind?.macd || [],
+                signal: ind?.signal || [],
+                hist: (ind?.hist || []).map((p) => ({
+                    ...p,
+                    color: p.value >= 0 ? "rgba(34, 197, 94, 0.7)" : "rgba(239, 68, 68, 0.7)",
+                })),
+            };
             if (macdRes.macd.length > 0) {
                 inst.series.macd.setData(macdRes.macd);
                 inst.series.signal.setData(macdRes.signal);
@@ -410,7 +429,11 @@
                 }
             }
         } else if (paneKey === "ADX" && inst.series.adx) {
-            const dmiRes = calculateDMI_ADX(candles, 14);
+            const dmiRes = {
+                adx: s.indicatorSeries?.adx || [],
+                diPlus: s.indicatorSeries?.diPlus || [],
+                diMinus: s.indicatorSeries?.diMinus || [],
+            };
             if (dmiRes.adx.length > 0) {
                 inst.series.adx.setData(dmiRes.adx);
                 inst.series.diPlus.setData(dmiRes.diPlus);
@@ -434,6 +457,40 @@
                 }
             }
         }
+    }
+
+    function volumePoint(c) {
+        return {
+            time: c.time,
+            value: c.volume,
+            color: c.close >= c.open ? "rgba(8, 153, 129, 0.25)" : "rgba(242, 54, 69, 0.25)",
+        };
+    }
+
+    function deltaPoint(c) {
+        return {
+            time: c.time,
+            value: Math.abs(c.delta || 0),
+            color: (c.delta || 0) >= 0 ? "rgba(34, 197, 94, 0.8)" : "rgba(248, 113, 113, 0.8)",
+        };
+    }
+
+    /** Full re-seed of the price panes. Only for a genuine dataset change. */
+    function reseedMainSeries(candles) {
+        candleSeries.setData(candles);
+        volumeSeries.setData(candles.map(volumePoint));
+        deltaSeries.setData(candles.map(deltaPoint));
+    }
+
+    function applyRange(range) {
+        try {
+            chart.timeScale().setVisibleLogicalRange(range);
+        } catch (e) {}
+        paneInstances.forEach((inst) => {
+            try {
+                inst.chart.timeScale().setVisibleLogicalRange(range);
+            } catch (e) {}
+        });
     }
 
     function updateAllSubPanes(passedState = null) {
@@ -548,6 +605,9 @@
         let currentActiveInterval = APP.interval;
         let prevIsReplayMode = false;
         let prevSelectedTrade = null;
+        let prevSignature = null;
+        let prevIndicatorSeries = null;
+        let prevCvdData = null;
 
         // Subscribe to state changes
         const unsubscribe = state.subscribe((s) => {
@@ -569,130 +629,58 @@
             prevIsReplayMode = s.isReplayMode;
             prevSelectedTrade = s.selectedTrade;
 
-            if (enteringReplay) {
-                candleSeries.setData(s.candles);
-                volumeSeries.setData(
-                    s.candles.map((c) => ({
-                        time: c.time,
-                        value: c.volume,
-                        color: c.close >= c.open ? "rgba(8, 153, 129, 0.25)" : "rgba(242, 54, 69, 0.25)",
-                    })),
-                );
-                deltaSeries.setData(
-                    s.candles.map((c) => ({
-                        time: c.time,
-                        value: Math.abs(c.delta || 0),
-                        color: (c.delta || 0) >= 0 ? "rgba(34, 197, 94, 0.8)" : "rgba(248, 113, 113, 0.8)",
-                    })),
-                );
+            // Re-seed only when the dataset identity actually changes.
+            //
+            // The fall-through branch here used to call `candleSeries.setData(s.candles)`
+            // on *every* store update - which included every WebSocket tick, with up to
+            // 240k candles - and then recompute every subpane indicator in JS. Live ticks
+            // now take the `liveCandle` path below and cost one `series.update()` call.
+            const n = s.candles.length;
+            const signature = `${n}:${s.candles[0].time}:${s.candles[n - 1].time}`;
+            const datasetChanged = signature !== prevSignature;
+            const intervalChanged = APP.interval !== currentActiveInterval;
+
+            if (datasetChanged || enteringReplay || exitingReplay) {
+                reseedMainSeries(s.candles);
                 updateAllSubPanes(s);
 
-                const tTime = Number(s.selectedTrade.entryTime || s.selectedTrade.entry_time || s.selectedTrade.time);
-                let tradeIdx = s.candles.findIndex((c) => c.time >= tTime);
-                if (tradeIdx === -1) tradeIdx = Math.floor(s.candles.length / 2);
+                const wasPrepend =
+                    prevEarliestTime !== null &&
+                    s.candles[0].time < prevEarliestTime &&
+                    !enteringReplay &&
+                    !exitingReplay;
 
-                const replayRange = {
-                    from: Math.max(0, tradeIdx - 35),
-                    to: Math.min(s.candles.length - 1, tradeIdx + 45),
-                };
-                chart.timeScale().setVisibleLogicalRange(replayRange);
-                paneInstances.forEach((inst) => {
-                    try { inst.chart.timeScale().setVisibleLogicalRange(replayRange); } catch (e) {}
-                });
-            } else if (exitingReplay) {
-                candleSeries.setData(s.candles);
-                volumeSeries.setData(
-                    s.candles.map((c) => ({
-                        time: c.time,
-                        value: c.volume,
-                        color: c.close >= c.open ? "rgba(8, 153, 129, 0.25)" : "rgba(242, 54, 69, 0.25)",
-                    })),
-                );
-                deltaSeries.setData(
-                    s.candles.map((c) => ({
-                        time: c.time,
-                        value: Math.abs(c.delta || 0),
-                        color: (c.delta || 0) >= 0 ? "rgba(34, 197, 94, 0.8)" : "rgba(248, 113, 113, 0.8)",
-                    })),
-                );
-                updateAllSubPanes(s);
-
-                const n = s.candles.length;
-                const liveRange = {
-                    from: Math.max(0, n - 130),
-                    to: n + 8,
-                };
-                chart.timeScale().setVisibleLogicalRange(liveRange);
-                paneInstances.forEach((inst) => {
-                    try { inst.chart.timeScale().setVisibleLogicalRange(liveRange); } catch (e) {}
-                });
-            } else if (APP.interval !== currentActiveInterval || !initialDataLoaded) {
-                currentActiveInterval = APP.interval;
-                candleSeries.setData(s.candles);
-                volumeSeries.setData(
-                    s.candles.map((c) => ({
-                        time: c.time,
-                        value: c.volume,
-                        color:
-                            c.close >= c.open
-                                ? "rgba(8, 153, 129, 0.25)"
-                                : "rgba(242, 54, 69, 0.25)",
-                    })),
-                );
-                deltaSeries.setData(
-                    s.candles.map((c) => ({
-                        time: c.time,
-                        value: Math.abs(c.delta || 0),
-                        color:
-                            (c.delta || 0) >= 0
-                                ? "rgba(34, 197, 94, 0.8)"
-                                : "rgba(248, 113, 113, 0.8)",
-                    })),
-                );
-                initialDataLoaded = true;
-                prevCandlesCount = s.candles.length;
+                prevSignature = signature;
                 prevEarliestTime = s.candles[0].time;
-                const n = s.candles.length;
-                if (n > 0) {
-                    const targetRange = {
-                        from: Math.max(0, n - 130),
-                        to: n + 8,
-                    };
-                    chart.timeScale().setVisibleLogicalRange(targetRange);
-                    paneInstances.forEach((inst) => {
-                        try { inst.chart.timeScale().setVisibleLogicalRange(targetRange); } catch (e) {}
+                prevCandlesCount = n;
+
+                // Move the viewport only when the event warrants it. Loading older candles
+                // by scrolling left must leave the user exactly where they were.
+                if (enteringReplay && s.selectedTrade) {
+                    const tTime = Number(
+                        s.selectedTrade.entryTime ||
+                            s.selectedTrade.entry_time ||
+                            s.selectedTrade.time,
+                    );
+                    let tradeIdx = s.candles.findIndex((c) => c.time >= tTime);
+                    if (tradeIdx === -1) tradeIdx = Math.floor(n / 2);
+                    applyRange({
+                        from: Math.max(0, tradeIdx - 35),
+                        to: Math.min(n - 1, tradeIdx + 45),
                     });
+                } else if (exitingReplay || intervalChanged || !initialDataLoaded) {
+                    applyRange({ from: Math.max(0, n - 130), to: n + 8 });
                 }
-                updateAllSubPanes(s);
-            } else if (prevEarliestTime !== null && s.candles[0].time < prevEarliestTime) {
-                candleSeries.setData(s.candles);
-                volumeSeries.setData(
-                    s.candles.map((c) => ({
-                        time: c.time,
-                        value: c.volume,
-                        color:
-                            c.close >= c.open
-                                ? "rgba(8, 153, 129, 0.25)"
-                                : "rgba(242, 54, 69, 0.25)",
-                    })),
-                );
-                deltaSeries.setData(
-                    s.candles.map((c) => ({
-                        time: c.time,
-                        value: Math.abs(c.delta || 0),
-                        color:
-                            (c.delta || 0) >= 0
-                                ? "rgba(34, 197, 94, 0.8)"
-                                : "rgba(248, 113, 113, 0.8)",
-                    })),
-                );
-                prevCandlesCount = s.candles.length;
-                prevEarliestTime = s.candles[0].time;
-                updateAllSubPanes(s);
-            } else {
-                candleSeries.setData(s.candles);
+
+                initialDataLoaded = true;
+                currentActiveInterval = APP.interval;
+            } else if (s.indicatorSeries !== prevIndicatorSeries || s.cvdData !== prevCvdData) {
+                // Same candles, fresh analysis from the engine: repaint the subpanes only.
                 updateAllSubPanes(s);
             }
+
+            prevIndicatorSeries = s.indicatorSeries;
+            prevCvdData = s.cvdData;
 
             // Visual primitives
             if (s.isReplayMode && s.selectedTrade) {
@@ -742,6 +730,25 @@
             }
         });
 
+        // Live tick: one incremental update instead of a full re-seed.
+        //
+        // `liveCandle` carries only the candle that changed. The candle array itself is
+        // mutated in place by binance.js, so the main subscription above sees no change of
+        // identity and correctly does nothing.
+        const unsubscribeLive = liveCandle.subscribe((c) => {
+            if (!c || !candleSeries) return;
+            // A replay is pinned to a historical window; live ticks must not disturb it.
+            if (get(state).isReplayMode) return;
+            try {
+                candleSeries.update(c);
+                volumeSeries.update(volumePoint(c));
+                deltaSeries.update(deltaPoint(c));
+            } catch (e) {
+                // Out-of-order tick (can happen right after a reconnect); the next full
+                // re-seed will reconcile it.
+            }
+        });
+
         // Price Lines Reactivity
         const unsubscribePriceLines = state.subscribe((s) => {
             if (s.selectedTrade && s.isReplayMode) {
@@ -759,6 +766,7 @@
             mainRo.disconnect();
             window.removeEventListener("resize", handleResize);
             unsubscribe();
+            unsubscribeLive();
             unsubscribePriceLines();
             paneInstances.forEach((inst) => {
                 if (inst.ro) inst.ro.disconnect();

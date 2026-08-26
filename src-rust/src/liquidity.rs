@@ -71,8 +71,20 @@ pub fn run_liquidity_strategy_logic(candles: &[Candle], mode: &str, sensitivity:
             if let Some(break_idx) = line.break_index {
                 // Buscar OB bajista cerca de la línea para un Short Trap
                 if line.line_type == "DOWN" {
+                    let break_time = candles.get(break_idx).map(|c| c.time).unwrap_or(0);
                     for zone in &zones {
-                        if zone.label == "OB" && zone.zone_type == "BEAR" && zone.status == "ACTIVE" {
+                        // `zone.status` is computed by scanning the entire future, so
+                        // filtering on it here would only ever select zones we know in
+                        // hindsight were never mitigated. Judge the zone as of the break
+                        // bar instead: formed before it, and not yet mitigated by then.
+                        let known_at_break = zone.time <= break_time;
+                        let unmitigated_at_break =
+                            zone.end_time.map_or(true, |end| end > break_time);
+                        if zone.label == "OB"
+                            && zone.zone_type == "BEAR"
+                            && known_at_break
+                            && unmitigated_at_break
+                        {
                             // Si el OB está cerca del break, es una trampa potencial
                             if (zone.top - line.start_price).abs() / line.start_price < 0.05 {
                                 if let Some(t) = crate::smc::create_trade(break_idx, "SHORT", zone.bottom, zone.top, candles, rr) {

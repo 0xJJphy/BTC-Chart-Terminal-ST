@@ -18,6 +18,11 @@
             icon: "fas fa-chart-pie",
             title: "Performance Monitoring",
         },
+        {
+            id: "analytics",
+            icon: "fas fa-chart-area",
+            title: "Analytics (equity, drawdown, distribución de R, validación)",
+        },
     ];
 </script>
 

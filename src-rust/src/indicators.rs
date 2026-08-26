@@ -1,101 +1,120 @@
-﻿use crate::models::Candle;
+use crate::models::Candle;
 
-/// Exponential Moving Average (EMA)
-pub fn calculate_ema(candles: &[Candle], period: usize) -> Vec<f64> {
-    let mut ema = vec![0.0; candles.len()];
-    if candles.is_empty() || period == 0 {
+/// All indicator series in this module are **strictly causal**: the value at index `i`
+/// is derived only from candles `0..=i`. Bars inside an indicator warm-up window are
+/// `None` rather than being back-filled with a seed computed from future data (which is
+/// what the previous implementation did, leaking look-ahead into the EMA-200 trend
+/// filter for every bar before index 199).
+pub type Series = Vec<Option<f64>>;
+
+/// Exponential Moving Average (EMA).
+///
+/// Seeded with the SMA of the first `period` closes, published at index `period - 1`.
+/// Everything before that is `None`.
+pub fn calculate_ema(candles: &[Candle], period: usize) -> Series {
+    let n = candles.len();
+    let mut ema: Series = vec![None; n];
+    if period == 0 || n < period {
         return ema;
     }
-    if candles.len() < period {
-        let avg: f64 = candles.iter().map(|c| c.close).sum::<f64>() / candles.len() as f64;
-        return vec![avg; candles.len()];
-    }
+
+    let seed: f64 = candles.iter().take(period).map(|c| c.close).sum::<f64>() / period as f64;
+    ema[period - 1] = Some(seed);
 
     let k = 2.0 / (period as f64 + 1.0);
-    let initial_sma: f64 = candles.iter().take(period).map(|c| c.close).sum::<f64>() / period as f64;
-    ema[period - 1] = initial_sma;
-
-    for i in 0..(period - 1) {
-        ema[i] = initial_sma;
-    }
-
-    for i in period..candles.len() {
-        ema[i] = candles[i].close * k + ema[i - 1] * (1.0 - k);
+    let mut prev = seed;
+    for i in period..n {
+        prev = candles[i].close * k + prev * (1.0 - k);
+        ema[i] = Some(prev);
     }
 
     ema
 }
 
-/// Average True Range (ATR)
-pub fn calculate_atr(candles: &[Candle], period: usize) -> Vec<f64> {
-    let mut atr = vec![0.0; candles.len()];
-    if candles.len() <= period || period == 0 {
+/// True Range for bar `i` (requires `i >= 1`).
+#[inline]
+fn true_range(candles: &[Candle], i: usize) -> f64 {
+    let h = candles[i].high;
+    let l = candles[i].low;
+    let prev_close = candles[i - 1].close;
+    (h - l).max((h - prev_close).abs()).max((l - prev_close).abs())
+}
+
+/// Average True Range (ATR), Wilder smoothing.
+///
+/// TR is undefined at index 0, so the seed (mean of TR over `1..=period`) is published
+/// at index `period`. Everything before that is `None`.
+pub fn calculate_atr(candles: &[Candle], period: usize) -> Series {
+    let n = candles.len();
+    let mut atr: Series = vec![None; n];
+    if period == 0 || n <= period {
         return atr;
     }
 
     let mut tr_sum = 0.0;
     for i in 1..=period {
-        let high = candles[i].high;
-        let low = candles[i].low;
-        let prev_close = candles[i - 1].close;
-        let tr = (high - low)
-            .max((high - prev_close).abs())
-            .max((low - prev_close).abs());
-        tr_sum += tr;
+        tr_sum += true_range(candles, i);
     }
+    let mut prev = tr_sum / period as f64;
+    atr[period] = Some(prev);
 
-    atr[period] = tr_sum / period as f64;
-    for i in 0..period {
-        atr[i] = atr[period];
-    }
-
-    for i in (period + 1)..candles.len() {
-        let high = candles[i].high;
-        let low = candles[i].low;
-        let prev_close = candles[i - 1].close;
-        let tr = (high - low)
-            .max((high - prev_close).abs())
-            .max((low - prev_close).abs());
-        atr[i] = (atr[i - 1] * (period - 1) as f64 + tr) / period as f64;
+    for i in (period + 1)..n {
+        prev = (prev * (period - 1) as f64 + true_range(candles, i)) / period as f64;
+        atr[i] = Some(prev);
     }
 
     atr
 }
 
-/// Rolling Average Volume
-pub fn calculate_avg_volume(candles: &[Candle], period: usize) -> Vec<f64> {
-    let mut avg_vol = vec![0.0; candles.len()];
-    if candles.len() < period || period == 0 {
-        return avg_vol;
+/// Rolling simple moving average of volume over the window `[i - period + 1 ..= i]`.
+///
+/// Includes the current bar, which is legitimate because every decision in the strategy
+/// is taken at bar close (where the bar's own volume is already known) and keeps volume
+/// consistent with the OHLC of the same bar. The previous implementation held a
+/// non-contiguous window that never dropped `v[0]`.
+pub fn calculate_avg_volume(candles: &[Candle], period: usize) -> Series {
+    let n = candles.len();
+    let mut avg: Series = vec![None; n];
+    if period == 0 || n < period {
+        return avg;
     }
 
-    let mut vol_sum: f64 = candles.iter().take(period).filter_map(|c| c.volume).sum();
-
-    for i in 0..period {
-        avg_vol[i] = vol_sum / period as f64;
-    }
-
-    for i in period..candles.len() {
-        avg_vol[i] = vol_sum / period as f64;
-        if i < candles.len() - 1 {
-            vol_sum -= candles[i - period + 1].volume.unwrap_or(0.0);
-            vol_sum += candles[i + 1].volume.unwrap_or(0.0);
+    let mut sum = 0.0;
+    for i in 0..n {
+        sum += candles[i].volume.unwrap_or(0.0);
+        if i >= period {
+            sum -= candles[i - period].volume.unwrap_or(0.0);
+        }
+        if i >= period - 1 {
+            avg[i] = Some(sum / period as f64);
         }
     }
 
-    avg_vol
+    avg
 }
 
-/// Relative Strength Index (RSI) - Wilder's Smoothing
-pub fn calculate_rsi(candles: &[Candle], period: usize) -> Vec<f64> {
-    let mut rsi = vec![50.0; candles.len()];
-    if candles.len() <= period || period == 0 {
+#[inline]
+fn rsi_from(avg_gain: f64, avg_loss: f64) -> f64 {
+    if avg_loss == 0.0 {
+        if avg_gain == 0.0 { 50.0 } else { 100.0 }
+    } else {
+        let rs = avg_gain / avg_loss;
+        100.0 - (100.0 / (1.0 + rs))
+    }
+}
+
+/// Relative Strength Index (RSI), Wilder smoothing.
+///
+/// First value is published at index `period`.
+pub fn calculate_rsi(candles: &[Candle], period: usize) -> Series {
+    let n = candles.len();
+    let mut rsi: Series = vec![None; n];
+    if period == 0 || n <= period {
         return rsi;
     }
 
     let mut gains = 0.0;
     let mut losses = 0.0;
-
     for i in 1..=period {
         let change = candles[i].close - candles[i - 1].close;
         if change >= 0.0 {
@@ -107,89 +126,102 @@ pub fn calculate_rsi(candles: &[Candle], period: usize) -> Vec<f64> {
 
     let mut avg_gain = gains / period as f64;
     let mut avg_loss = losses / period as f64;
+    rsi[period] = Some(rsi_from(avg_gain, avg_loss));
 
-    if avg_loss == 0.0 {
-        rsi[period] = 100.0;
-    } else {
-        let rs = avg_gain / avg_loss;
-        rsi[period] = 100.0 - (100.0 / (1.0 + rs));
-    }
-
-    for i in (period + 1)..candles.len() {
+    for i in (period + 1)..n {
         let change = candles[i].close - candles[i - 1].close;
         let gain = if change > 0.0 { change } else { 0.0 };
         let loss = if change < 0.0 { -change } else { 0.0 };
 
         avg_gain = (avg_gain * (period - 1) as f64 + gain) / period as f64;
         avg_loss = (avg_loss * (period - 1) as f64 + loss) / period as f64;
-
-        if avg_loss == 0.0 {
-            rsi[i] = 100.0;
-        } else {
-            let rs = avg_gain / avg_loss;
-            rsi[i] = 100.0 - (100.0 / (1.0 + rs));
-        }
+        rsi[i] = Some(rsi_from(avg_gain, avg_loss));
     }
 
     rsi
 }
 
-/// MACD Indicator (12, 26, 9)
+/// MACD indicator.
 #[derive(Debug, Clone)]
 pub struct MacdResult {
-    pub macd: Vec<f64>,
-    pub signal: Vec<f64>,
-    pub hist: Vec<f64>,
+    pub macd: Series,
+    pub signal: Series,
+    pub hist: Series,
 }
 
-pub fn calculate_macd(candles: &[Candle], fast_period: usize, slow_period: usize, signal_period: usize) -> MacdResult {
+/// MACD (fast, slow, signal).
+///
+/// The MACD line starts at `slow_period - 1` (where both EMAs exist). The signal line is
+/// an EMA of the MACD line seeded with its SMA, so it starts `signal_period - 1` bars
+/// later. The histogram is only defined where the signal line is.
+pub fn calculate_macd(
+    candles: &[Candle],
+    fast_period: usize,
+    slow_period: usize,
+    signal_period: usize,
+) -> MacdResult {
+    let n = candles.len();
     let fast_ema = calculate_ema(candles, fast_period);
     let slow_ema = calculate_ema(candles, slow_period);
-    
-    let mut macd_line = vec![0.0; candles.len()];
-    for i in 0..candles.len() {
-        macd_line[i] = fast_ema[i] - slow_ema[i];
-    }
 
-    // Signal is EMA of MACD Line
-    let k = 2.0 / (signal_period as f64 + 1.0);
-    let mut signal_line = vec![0.0; candles.len()];
-    let mut hist = vec![0.0; candles.len()];
-
-    if candles.len() >= slow_period + signal_period {
-        let start_idx = slow_period;
-        let init_slice = &macd_line[start_idx..(start_idx + signal_period)];
-        let init_sma: f64 = init_slice.iter().sum::<f64>() / signal_period as f64;
-        signal_line[start_idx + signal_period - 1] = init_sma;
-
-        for i in (start_idx + signal_period)..candles.len() {
-            signal_line[i] = macd_line[i] * k + signal_line[i - 1] * (1.0 - k);
-            hist[i] = macd_line[i] - signal_line[i];
+    let mut macd_line: Series = vec![None; n];
+    for i in 0..n {
+        if let (Some(f), Some(s)) = (fast_ema[i], slow_ema[i]) {
+            macd_line[i] = Some(f - s);
         }
     }
 
-    MacdResult {
-        macd: macd_line,
-        signal: signal_line,
-        hist,
+    let mut signal_line: Series = vec![None; n];
+    let mut hist: Series = vec![None; n];
+
+    let macd_start = match macd_line.iter().position(|v| v.is_some()) {
+        Some(idx) => idx,
+        None => return MacdResult { macd: macd_line, signal: signal_line, hist },
+    };
+
+    if signal_period == 0 || n < macd_start + signal_period {
+        return MacdResult { macd: macd_line, signal: signal_line, hist };
     }
+
+    let seed_end = macd_start + signal_period; // exclusive
+    let seed: f64 = macd_line[macd_start..seed_end]
+        .iter()
+        .map(|v| v.unwrap_or(0.0))
+        .sum::<f64>()
+        / signal_period as f64;
+
+    let signal_seed_idx = seed_end - 1;
+    signal_line[signal_seed_idx] = Some(seed);
+    hist[signal_seed_idx] = Some(macd_line[signal_seed_idx].unwrap_or(0.0) - seed);
+
+    let k = 2.0 / (signal_period as f64 + 1.0);
+    let mut prev = seed;
+    for i in seed_end..n {
+        let m = macd_line[i].unwrap_or(0.0);
+        prev = m * k + prev * (1.0 - k);
+        signal_line[i] = Some(prev);
+        hist[i] = Some(m - prev);
+    }
+
+    MacdResult { macd: macd_line, signal: signal_line, hist }
 }
 
-/// DMI and ADX (Directional Movement Index)
+/// DMI and ADX (Directional Movement Index).
 #[derive(Debug, Clone)]
 pub struct DmiAdxResult {
-    pub adx: Vec<f64>,
-    pub di_plus: Vec<f64>,
-    pub di_minus: Vec<f64>,
+    pub adx: Series,
+    pub di_plus: Series,
+    pub di_minus: Series,
 }
 
+/// Wilder DMI/ADX. +DI/-DI start at index `period`; ADX starts at `period * 2 - 1`.
 pub fn calculate_dmi_adx(candles: &[Candle], period: usize) -> DmiAdxResult {
     let n = candles.len();
-    let mut di_plus = vec![0.0; n];
-    let mut di_minus = vec![0.0; n];
-    let mut adx = vec![0.0; n];
+    let mut di_plus: Series = vec![None; n];
+    let mut di_minus: Series = vec![None; n];
+    let mut adx: Series = vec![None; n];
 
-    if n <= period * 2 || period == 0 {
+    if period == 0 || n <= period * 2 {
         return DmiAdxResult { adx, di_plus, di_minus };
     }
 
@@ -198,16 +230,10 @@ pub fn calculate_dmi_adx(candles: &[Candle], period: usize) -> DmiAdxResult {
     let mut minus_dm = vec![0.0; n];
 
     for i in 1..n {
-        let h = candles[i].high;
-        let l = candles[i].low;
-        let prev_h = candles[i - 1].high;
-        let prev_l = candles[i - 1].low;
-        let prev_c = candles[i - 1].close;
+        tr[i] = true_range(candles, i);
 
-        tr[i] = (h - l).max((h - prev_c).abs()).max((l - prev_c).abs());
-
-        let up_move = h - prev_h;
-        let down_move = prev_l - l;
+        let up_move = candles[i].high - candles[i - 1].high;
+        let down_move = candles[i - 1].low - candles[i].low;
 
         if up_move > down_move && up_move > 0.0 {
             plus_dm[i] = up_move;
@@ -218,51 +244,57 @@ pub fn calculate_dmi_adx(candles: &[Candle], period: usize) -> DmiAdxResult {
     }
 
     let mut smooth_tr: f64 = tr[1..=period].iter().sum();
-    let mut smooth_plus_dm: f64 = plus_dm[1..=period].iter().sum();
-    let mut smooth_minus_dm: f64 = minus_dm[1..=period].iter().sum();
+    let mut smooth_plus: f64 = plus_dm[1..=period].iter().sum();
+    let mut smooth_minus: f64 = minus_dm[1..=period].iter().sum();
 
     let mut dx = vec![0.0; n];
 
     for i in period..n {
         if i > period {
             smooth_tr = smooth_tr - (smooth_tr / period as f64) + tr[i];
-            smooth_plus_dm = smooth_plus_dm - (smooth_plus_dm / period as f64) + plus_dm[i];
-            smooth_minus_dm = smooth_minus_dm - (smooth_minus_dm / period as f64) + minus_dm[i];
+            smooth_plus = smooth_plus - (smooth_plus / period as f64) + plus_dm[i];
+            smooth_minus = smooth_minus - (smooth_minus / period as f64) + minus_dm[i];
         }
 
-        let p_di = if smooth_tr > 0.0 { (smooth_plus_dm / smooth_tr) * 100.0 } else { 0.0 };
-        let m_di = if smooth_tr > 0.0 { (smooth_minus_dm / smooth_tr) * 100.0 } else { 0.0 };
+        let p_di = if smooth_tr > 0.0 { (smooth_plus / smooth_tr) * 100.0 } else { 0.0 };
+        let m_di = if smooth_tr > 0.0 { (smooth_minus / smooth_tr) * 100.0 } else { 0.0 };
 
-        di_plus[i] = p_di;
-        di_minus[i] = m_di;
+        di_plus[i] = Some(p_di);
+        di_minus[i] = Some(m_di);
 
         let di_sum = p_di + m_di;
-        let di_diff = (p_di - m_di).abs();
-        dx[i] = if di_sum > 0.0 { (di_diff / di_sum) * 100.0 } else { 0.0 };
+        dx[i] = if di_sum > 0.0 { ((p_di - m_di).abs() / di_sum) * 100.0 } else { 0.0 };
     }
 
-    let adx_start = period * 2;
-    if n > adx_start {
-        let mut smooth_adx: f64 = dx[period..adx_start].iter().sum::<f64>() / period as f64;
-        adx[adx_start - 1] = smooth_adx;
+    // ADX seeds with the mean of the first `period` DX values (indices `period..=period*2-1`),
+    // published at index `period * 2 - 1`.
+    let adx_seed_idx = period * 2 - 1;
+    let mut smooth_adx: f64 = dx[period..=adx_seed_idx].iter().sum::<f64>() / period as f64;
+    adx[adx_seed_idx] = Some(smooth_adx);
 
-        for i in adx_start..n {
-            smooth_adx = (smooth_adx * (period - 1) as f64 + dx[i]) / period as f64;
-            adx[i] = smooth_adx;
-        }
+    for i in (adx_seed_idx + 1)..n {
+        smooth_adx = (smooth_adx * (period - 1) as f64 + dx[i]) / period as f64;
+        adx[i] = Some(smooth_adx);
     }
 
     DmiAdxResult { adx, di_plus, di_minus }
 }
 
-/// S/R Pivot Highs and Lows
+/// A confirmed swing high or low.
 #[derive(Debug, Clone)]
 pub struct PivotLevel {
     pub time: u64,
     pub price: f64,
     pub is_high: bool,
+    /// Index of the candle at which this pivot first becomes knowable (`bar_index + right`).
+    /// A pivot at bar `i` needs `right` bars to its right before it can be confirmed, so no
+    /// decision taken before this index may consult it.
+    pub confirmed_at_index: usize,
+    /// Index of the candle that forms the pivot.
+    pub bar_index: usize,
 }
 
+/// S/R pivot highs and lows, in ascending order of `confirmed_at_index`.
 pub fn calculate_pivots(candles: &[Candle], left: usize, right: usize) -> Vec<PivotLevel> {
     let mut pivots = Vec::new();
     if candles.len() < left + right + 1 {
@@ -290,6 +322,8 @@ pub fn calculate_pivots(candles: &[Candle], left: usize, right: usize) -> Vec<Pi
                 time: candles[i].time,
                 price: curr_h,
                 is_high: true,
+                confirmed_at_index: i + right,
+                bar_index: i,
             });
         }
         if is_pivot_low {
@@ -297,9 +331,13 @@ pub fn calculate_pivots(candles: &[Candle], left: usize, right: usize) -> Vec<Pi
                 time: candles[i].time,
                 price: curr_l,
                 is_high: false,
+                confirmed_at_index: i + right,
+                bar_index: i,
             });
         }
     }
 
+    // `bar_index` is ascending and `right` is constant, so `confirmed_at_index` is ascending
+    // too. The incremental pivot cursor in crypto_pro relies on this ordering.
     pivots
 }

@@ -6,6 +6,7 @@
     import RegLinPanel from "./panels/RegLinPanel.svelte";
     import StratPanel from "./panels/StratPanel.svelte";
     import PnLPanel from "./panels/PnLPanel.svelte";
+    import AnalyticsPanel from "./panels/AnalyticsPanel.svelte";
     import OrderFlowPanel from "./panels/OrderFlowPanel.svelte";
     import LogPanel from "./panels/LogPanel.svelte";
 </script>
@@ -28,6 +29,8 @@
         <StratPanel />
     {:else if $state.activeMode === "pnl"}
         <PnLPanel />
+    {:else if $state.activeMode === "analytics"}
+        <AnalyticsPanel />
     {:else if $state.activeMode === "log"}
         <LogPanel />
     {/if}

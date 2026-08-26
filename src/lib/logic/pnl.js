@@ -1,139 +1,48 @@
 /**
- * PnL and Performance Metrics Module
- * Logic for calculating account growth, drawdown, and risk metrics.
+ * PnL and performance metrics — thin wrapper over the Rust engine.
+ *
+ * The previous implementation lived entirely here and had four problems that made its
+ * output unusable for judging a strategy:
+ *
+ *  - Sharpe annualized *per-trade* returns with `sqrt(252)`. With ~2 trades/day that
+ *    overstated the ratio by roughly 2x, and 252 is the equity-market trading-day count,
+ *    not the 365 days a perpetual actually trades.
+ *  - Sortino divided by the count of losing days instead of the full sample.
+ *  - Calmar used total return over max drawdown; Calmar is annualized by definition.
+ *  - Breakeven trades were counted as wins, and max drawdown was measured only at trade
+ *    closes, so intra-trade and open-position drawdown were invisible.
+ *
+ * All of that now lives in src-rust/src/metrics.rs, computed off the bar-by-bar
+ * mark-to-market equity curve. This module exists so older call sites keep working.
+ *
+ * Prefer calling `updatePnL()` / `callEngine('metrics', ...)` directly; this helper is
+ * async because the engine runs in a worker.
  */
 
-export function calculatePnLMetrics(trades, candles, config = {}) {
-    const initialBalance = config.initialBalance || 10000;
-    const makerFeePct = (config.feeMaker || 0.1) / 100;
-    const takerFeePct = (config.feeTaker || 0.1) / 100;
-    const useFees = config.includeFees || false;
-    const riskPerTrade = initialBalance * 0.01;
+import { callEngine } from './engine_client.js';
+import { resolveMetricsConfig } from '../config/strategies.js';
 
-    let realizedPnL = 0, unrealizedPnL = 0, wins = 0, losses = 0, grossProfit = 0, grossLoss = 0;
-    let returns = [], equityCurve = [], firstTradeTime = null, lastTradeTime = null;
-    let totalDuration = 0, maxDuration = 0, durationCount = 0;
-
-    if (candles.length > 0) {
-        equityCurve.push({ time: candles[0].time, value: initialBalance });
-    }
-
-    let currentEquity = initialBalance, maxPeak = initialBalance, maxDrawdown = 0;
-
-    const closedTrades = trades
-        .filter(t => t.status === 'WIN' || t.status === 'LOSS' || t.status === 'BE' || t.status === 'CLOSED')
-        .sort((a, b) => (a.exitTime || 0) - (b.exitTime || 0));
-
-    trades.forEach(t => {
-        if (t.status === 'WIN' || t.status === 'LOSS' || t.status === 'BE' || t.status === 'CLOSED' || t.status === 'OPEN') {
-            if (t.entryTime) {
-                if (!firstTradeTime || t.entryTime < firstTradeTime) firstTradeTime = t.entryTime;
-                let tradeEnd = t.exitTime || (candles.length > 0 ? candles[candles.length - 1].time : 0);
-                if (!lastTradeTime || tradeEnd > lastTradeTime) lastTradeTime = tradeEnd;
-                let dur = tradeEnd - t.entryTime;
-                totalDuration += dur;
-                if (dur > maxDuration) maxDuration = dur;
-                durationCount++;
-            }
-            if (t.status === 'OPEN') {
-                unrealizedPnL += (t.pnlPercent * riskPerTrade);
-            }
-        }
-    });
-
-    closedTrades.forEach(t => {
-        let pnlVal = (t.pnl !== undefined && t.pnl !== null ? t.pnl : 0) * riskPerTrade;
-
-        if (useFees) {
-            const entryPrice = t.entry;
-            const slPrice = t.sl;
-            const distSL = Math.abs(entryPrice - slPrice);
-
-            if (distSL > 0) {
-                const positionSizeUnits = riskPerTrade / distSL;
-                const notionalEntry = positionSizeUnits * entryPrice;
-                const exitPrice = (t.status === 'WIN' && t.tp) ? t.tp : ((t.status === 'BE' || (t.desc && t.desc.includes('BE'))) ? entryPrice : (t.sl || entryPrice));
-                const notionalExit = positionSizeUnits * exitPrice;
-
-                const feeEntry = notionalEntry * takerFeePct;
-                const feeExit = (t.status === 'WIN') ? notionalExit * makerFeePct : notionalExit * takerFeePct;
-                pnlVal -= (feeEntry + feeExit);
-            }
-        }
-
-        realizedPnL += pnlVal;
-        currentEquity += pnlVal;
-        returns.push(pnlVal);
-
-        if (pnlVal > 0) { wins++; grossProfit += pnlVal; }
-        else if (pnlVal < 0) { losses++; grossLoss += Math.abs(pnlVal); }
-        else { wins++; } // 0.0R considered non-loss BE
-
-        if (currentEquity > maxPeak) maxPeak = currentEquity;
-        const dd = (maxPeak - currentEquity) / maxPeak;
-        if (dd > maxDrawdown) maxDrawdown = dd;
-
-        const lastPoint = equityCurve[equityCurve.length - 1];
-        if (lastPoint && lastPoint.time === t.exitTime) {
-            lastPoint.value = currentEquity;
-        } else {
-            equityCurve.push({ time: t.exitTime, value: currentEquity });
-        }
-    });
-
-    const totalTrades = wins + losses;
-    const winRate = totalTrades > 0 ? (wins / totalTrades) * 100 : 0;
-    const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : (grossProfit > 0 ? 999 : 0);
-
-    let sharpe = 0;
-    let sortino = 0;
-    if (returns.length > 1) {
-        const meanReturn = returns.reduce((a, b) => a + b, 0) / returns.length;
-        const variance = returns.reduce((sum, r) => sum + Math.pow(r - meanReturn, 2), 0) / (returns.length - 1);
-        const stdDev = Math.sqrt(variance);
-        if (stdDev > 0) {
-            sharpe = (meanReturn / stdDev) * Math.sqrt(252);
-        }
-        const downsideReturns = returns.filter(r => r < 0);
-        if (downsideReturns.length > 0) {
-            const downsideVar = downsideReturns.reduce((sum, r) => sum + Math.pow(r, 2), 0) / downsideReturns.length;
-            const downsideStd = Math.sqrt(downsideVar);
-            if (downsideStd > 0) {
-                sortino = (meanReturn / downsideStd) * Math.sqrt(252);
-            }
-        }
-    }
-
-    const avgWin = wins > 0 ? grossProfit / wins : 0;
-    const avgLoss = losses > 0 ? grossLoss / losses : 0;
-    const payoffRatio = avgLoss > 0 ? avgWin / avgLoss : (avgWin > 0 ? 999 : 0);
-    const winPct = totalTrades > 0 ? wins / totalTrades : 0;
-    const lossPct = totalTrades > 0 ? losses / totalTrades : 0;
-    const expectancy = (winPct * avgWin) - (lossPct * avgLoss);
-    const calmar = maxDrawdown > 0 ? (realizedPnL / initialBalance) / maxDrawdown : 0;
-
-    return {
-        metrics: {
-            totalTrades,
-            winRate,
-            profitFactor,
-            sharpe,
-            sortino,
-            maxDrawdown: maxDrawdown * 100,
-            expectancy,
-            payoffRatio,
-            calmar,
-            avgWin,
-            avgLoss,
-            totalPnL: realizedPnL,
-            currentEquity: currentEquity + unrealizedPnL,
-            realizedPnL,
-            unrealizedPnL,
-            avgDuration: durationCount > 0 ? totalDuration / durationCount : 0,
-            maxDuration,
-            firstTradeTime,
-            lastTradeTime
+/**
+ * @param {Array} trades
+ * @param {Array} equityCurve bar-level curve from the strategy; `[]` falls back to a
+ *   trade-close approximation inside the engine.
+ * @param {object} config overrides merged over the metrics defaults.
+ * @returns {Promise<{metrics: object, equityCurve: Array}>}
+ */
+export async function calculatePnLMetrics(trades = [], equityCurve = [], config = {}) {
+    const metricsConfig = resolveMetricsConfig(
+        {},
+        {
+            ...(config.initialBalance ? { initialCapital: config.initialBalance } : {}),
+            ...config,
         },
-        equityCurve
-    };
+    );
+
+    const metrics = await callEngine('metrics', {
+        trades,
+        equityCurve,
+        config: metricsConfig,
+    });
+
+    return { metrics, equityCurve: metrics?.equityCurve || [] };
 }

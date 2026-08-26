@@ -4,7 +4,18 @@
         runFullLoadPipeline,
         manualRefresh,
         exitReplay,
+        engineStatus,
     } from "../lib/logic/app_controller.js";
+
+    // A Wasm failure used to be completely invisible: the engine silently fell back to the
+    // JS path (or to nothing at all) and the UI looked identical. Surface it.
+    const ENGINE_LABEL = {
+        worker: { text: "Rust/Wasm", dot: "bg-bull", hint: "Motor Rust en Web Worker (hilo principal libre)" },
+        "main-thread": { text: "Wasm (main)", dot: "bg-amber-400", hint: "El worker no arrancó: el motor corre en el hilo principal y la UI puede bloquearse" },
+        failed: { text: "Motor caído", dot: "bg-bear", hint: "El motor Wasm no cargó. Los resultados mostrados no son fiables." },
+        starting: { text: "Iniciando", dot: "bg-slate-500", hint: "Cargando el motor" },
+    };
+    $: eng = ENGINE_LABEL[$engineStatus.mode] || ENGINE_LABEL.starting;
 
     function setTF(tf) {
         if (APP.interval === tf) return;
@@ -62,6 +73,17 @@
         <div class="hidden md:flex items-center gap-2 bg-black/20 px-2.5 py-1 rounded border border-border/40 text-[10px] font-mono text-slate-400">
             <i class="fas fa-database text-[9px] text-accent"></i>
             <span>{$state.candles.length.toLocaleString()} candles in view</span>
+        </div>
+
+        <div
+            class="hidden lg:flex items-center gap-2 bg-black/20 px-2.5 py-1 rounded border {$engineStatus.mode === 'failed' ? 'border-bear/60' : 'border-border/40'} text-[10px] font-mono text-slate-400"
+            title={eng.hint}
+        >
+            <div class="w-1.5 h-1.5 rounded-full {eng.dot} {$engineStatus.busy > 0 ? 'animate-pulse' : ''}"></div>
+            <span>{eng.text}</span>
+            {#if $engineStatus.busy > 0}
+                <i class="fas fa-spinner fa-spin text-[8px] text-accent"></i>
+            {/if}
         </div>
 
         <div class="flex flex-col items-end">
